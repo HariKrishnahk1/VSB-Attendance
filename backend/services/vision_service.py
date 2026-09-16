@@ -4,6 +4,7 @@ import json
 import numpy as np
 import cv2
 import re
+import urllib.request
 from pathlib import Path
 from backend.config import (
     YUNET_MODEL_PATH, SFACE_MODEL_PATH,
@@ -11,9 +12,24 @@ from backend.config import (
     YUNET_NMS_THRESHOLD
 )
 
+# Official OpenCV Pretrained ONNX Models
+YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+SFACE_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+
 # Optimized for 70 to 80 Students High-Density Classroom / Lecture Hall
 HIGH_DENSITY_SCORE_THRESHOLD = 0.40
 MAX_CLASSROOM_DETECTIONS = 5000
+
+
+def _ensure_model_exists(file_path: str, url: str):
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        print(f"[VisionEngine] Pretrained model missing at {file_path}. Auto-downloading from OpenCV Zoo ({url})...")
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        try:
+            urllib.request.urlretrieve(url, file_path)
+            print(f"[VisionEngine] Successfully downloaded model to {file_path}!")
+        except Exception as e:
+            print(f"[VisionEngine] Error downloading model from {url}: {e}")
 
 
 class VisionEngine:
@@ -27,6 +43,9 @@ class VisionEngine:
 
     def _init_models(self):
         print("[VisionEngine] Initializing 70-80 Student High-Density Classroom YuNet & SFace models...")
+        _ensure_model_exists(YUNET_MODEL_PATH, YUNET_URL)
+        _ensure_model_exists(SFACE_MODEL_PATH, SFACE_URL)
+
         if not os.path.exists(YUNET_MODEL_PATH) or not os.path.exists(SFACE_MODEL_PATH):
             raise FileNotFoundError(
                 f"Vision models missing at {YUNET_MODEL_PATH} or {SFACE_MODEL_PATH}."

@@ -13,9 +13,9 @@ UPLOAD_DIR = BASE_STORAGE / "uploads"
 STUDENT_PHOTOS_DIR = UPLOAD_DIR / "student_photos"
 REVIEW_CROPS_DIR = UPLOAD_DIR / "review_crops"
 EXCEL_OUTPUT_DIR = UPLOAD_DIR / "excel_reports"
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = BASE_STORAGE / "models" if IS_VERCEL else BASE_DIR / "models"
 
-for directory in [UPLOAD_DIR, STUDENT_PHOTOS_DIR, REVIEW_CROPS_DIR, EXCEL_OUTPUT_DIR]:
+for directory in [UPLOAD_DIR, STUDENT_PHOTOS_DIR, REVIEW_CROPS_DIR, EXCEL_OUTPUT_DIR, MODELS_DIR]:
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -45,6 +45,17 @@ if IS_VERCEL:
             print("[Vercel Setup] Synced pre-existing upload assets to /tmp/uploads")
         except Exception as e:
             print(f"[Vercel Setup] Error copying upload assets: {e}")
+
+    models_root = BASE_DIR / "models"
+    if models_root.exists():
+        try:
+            for item in models_root.glob("*.onnx"):
+                target_path = MODELS_DIR / item.name
+                if not target_path.exists():
+                    shutil.copy2(item, target_path)
+            print("[Vercel Setup] Synced ONNX vision models to /tmp/models")
+        except Exception as e:
+            print(f"[Vercel Setup] Error copying ONNX models: {e}")
 
     DATABASE_URL = "sqlite:////tmp/attendance.db"
 else:

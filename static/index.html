@@ -186,6 +186,30 @@ body {
 .shortlist-pill.danger.active { background: var(--danger); color: #FFF; border-color: var(--danger); }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.app-footer {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--border-color);
+  background: rgba(9, 13, 22, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: var(--radius-md);
+}
+.footer-text {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+.footer-text strong {
+  background: linear-gradient(135deg, #00F2FE 0%, #4FACFE 50%, #FDE047 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -780,8 +804,12 @@ body {
             </table>
           </div>
         </div>
-      </div>
     </section>
+
+    <!-- Global Application Footer -->
+    <footer class="app-footer">
+      <p class="footer-text">Created and Developed by <strong>HK😉</strong></p>
+    </footer>
 
   </main>
 

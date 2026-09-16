@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.db
+uploads/temp_*
+uploads/review_crops/*
+uploads/excel_reports/*
+.pytest_cache/
+.vscode/
+.idea/

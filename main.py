@@ -50,6 +50,15 @@ def get_js():
         return FileResponse(str(js_path), media_type="application/javascript")
     return Response(status_code=404)
 
+@app.get("/favicon.ico")
+@app.get("/favicon.png")
+@app.get("/logo.png")
+def get_favicon():
+    logo_path = BASE_DIR / "static" / "img" / "logo.png"
+    if logo_path.exists():
+        return FileResponse(str(logo_path), media_type="image/png")
+    return Response(status_code=404)
+
 # Mount Static Files & Uploads
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/static/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")

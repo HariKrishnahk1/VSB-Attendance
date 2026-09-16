@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Automated Attendance Portal — Smartboard & AI Vision</title>
+  <title>V.S.B. ENGINEERING COLLEGE — AI Automated Attendance Portal</title>
+  <link rel="icon" type="image/png" href="/static/img/logo.png" />
+  <link rel="shortcut icon" href="/static/img/logo.png" />
+  <link rel="apple-touch-icon" href="/static/img/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -52,8 +55,9 @@ body {
 .glow-2 { width: 600px; height: 600px; background: radial-gradient(circle, rgba(236, 72, 153, 0.25), rgba(59, 130, 246, 0.1)); bottom: -150px; right: -150px; }
 .navbar { display: flex; justify-content: space-between; align-items: center; padding: 0.85rem 2rem; background: rgba(17, 24, 39, 0.8); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4); }
 .nav-brand { display: flex; align-items: center; gap: 0.85rem; }
-.logo-icon { width: 42px; height: 42px; background: var(--gradient-primary); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; color: #000; box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
-.brand-title { display: block; font-weight: 800; font-size: 1.15rem; background: linear-gradient(90deg, #FFF, #93C5FD); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.logo-icon { width: 44px; height: 44px; background: #FFFFFF; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 15px rgba(255, 215, 0, 0.4); padding: 2px; }
+.logo-icon img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; }
+.brand-title { display: block; font-weight: 800; font-size: 1.15rem; background: linear-gradient(90deg, #FFF, #FCD34D); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px; }
 .brand-subtitle { display: block; font-size: 0.75rem; color: var(--text-muted); }
 .nav-user { display: flex; align-items: center; gap: 1rem; }
 .role-badge { padding: 0.3rem 0.85rem; font-size: 0.75rem; font-weight: 800; border-radius: 999px; background: var(--gradient-primary); color: #000; letter-spacing: 0.5px; box-shadow: 0 0 10px rgba(56, 189, 248, 0.3); }
@@ -62,8 +66,9 @@ body {
 .container { max-width: 1440px; margin: 0 auto; padding: 1.75rem; }
 .login-wrapper { max-width: 480px; margin: 3.5rem auto; }
 .login-header { text-align: center; margin-bottom: 2rem; }
-.portal-logo { width: 76px; height: 76px; margin: 0 auto 1.25rem; background: var(--gradient-purple); border-radius: 22px; display: flex; align-items: center; justify-content: center; color: white; box-shadow: 0 12px 30px rgba(127, 0, 255, 0.4), 0 0 20px rgba(225, 0, 255, 0.2); }
-.login-header h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 0.35rem; background: linear-gradient(135deg, #FFF 30%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.portal-logo { width: 110px; height: 110px; margin: 0 auto 1.25rem; background: #FFFFFF; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(239, 68, 68, 0.5), 0 0 25px rgba(255, 215, 0, 0.4); overflow: hidden; padding: 4px; }
+.portal-logo img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; }
+.login-header h1 { font-size: 1.75rem; font-weight: 800; margin-bottom: 0.35rem; background: linear-gradient(135deg, #FFF 30%, #FDE047 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px; }
 .login-header p { color: var(--text-muted); font-size: 0.92rem; }
 .role-selector-pills { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.65rem; margin-bottom: 1.25rem; }
 .role-pill { padding: 0.75rem; border-radius: var(--radius-md); background: rgba(17, 24, 39, 0.6); border: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); backdrop-filter: blur(8px); }
@@ -193,14 +198,11 @@ body {
   <header class="navbar" id="mainNavbar" style="display: none;">
     <div class="nav-brand">
       <div class="logo-icon">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M15 10l5 5-5 5"/>
-          <path d="M4 4v7a4 4 0 0 0 4 4h12"/>
-        </svg>
+        <img src="/static/img/logo.png" alt="V.S.B. Logo" />
       </div>
       <div>
-        <span class="brand-title">AI Vision Attendance</span>
-        <span class="brand-subtitle">Smartboard & Academic Portal</span>
+        <span class="brand-title">V.S.B. ENGINEERING COLLEGE</span>
+        <span class="brand-subtitle">AI Vision Attendance & Smartboard Portal</span>
       </div>
     </div>
     
@@ -224,13 +226,10 @@ body {
       <div class="login-wrapper">
         <div class="login-header">
           <div class="portal-logo">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-              <circle cx="12" cy="13" r="4"/>
-            </svg>
+            <img src="/static/img/logo.png" alt="V.S.B. Engineering College Logo" />
           </div>
-          <h1>AI Automated Attendance Portal</h1>
-          <p>College & Classroom Smartboard Recognition System</p>
+          <h1>V.S.B. ENGINEERING COLLEGE</h1>
+          <p>AI Automated Attendance Portal — Smartboard & Academic Management</p>
         </div>
 
         <div class="role-selector-pills">
@@ -273,9 +272,11 @@ body {
       <div class="smartboard-container">
         <!-- Smartboard Header Banner -->
         <div class="smartboard-header">
-          <div class="smartboard-title">
-            <h2>AUTOMATED CLASSROOM ATTENDANCE</h2>
-            <div class="smartboard-meta">
+          <div class="smartboard-title" style="display: flex; align-items: center; gap: 1rem;">
+            <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 46px; height: 46px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 12px rgba(255,215,0,0.4);" />
+            <div>
+              <h2>AUTOMATED CLASSROOM ATTENDANCE</h2>
+              <div class="smartboard-meta">
               <span class="meta-tag" id="sbClassDisplay">Class: III AI & DS - A</span>
               <span class="meta-tag">
                 Subject: 
@@ -399,9 +400,12 @@ body {
     <!-- STAFF DASHBOARD SCREEN (ROLE 2: STAFF) -->
     <section id="staffScreen" class="view-screen" style="display: none;">
       <div class="dashboard-header">
-        <div>
-          <h2>STAFF ATTENDANCE DASHBOARD</h2>
-          <p>Review uncertain face captures, confirm classroom rosters, and generate Excel sheets.</p>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 46px; height: 46px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 12px rgba(255,215,0,0.4);" />
+          <div>
+            <h2>STAFF ATTENDANCE DASHBOARD</h2>
+            <p>V.S.B. Engineering College — Session Verification & Excel Generation</p>
+          </div>
         </div>
         <div class="header-actions">
           <select id="staffClassFilter" class="form-select">
@@ -487,9 +491,12 @@ body {
     <!-- HOD DASHBOARD SCREEN (ROLE 3: HOD) -->
     <section id="hodScreen" class="view-screen" style="display: none;">
       <div class="dashboard-header">
-        <div>
-          <h2>HOD DEPARTMENT DASHBOARD</h2>
-          <p>Department: <strong id="hodDeptTitle">Artificial Intelligence & Data Science</strong></p>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 46px; height: 46px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 12px rgba(255,215,0,0.4);" />
+          <div>
+            <h2>HOD DEPARTMENT DASHBOARD</h2>
+            <p>V.S.B. Engineering College — Department: <strong id="hodDeptTitle">Artificial Intelligence & Data Science</strong></p>
+          </div>
         </div>
         <div class="header-actions">
           <input type="date" id="hodDateFilter" class="form-select" />
@@ -566,9 +573,12 @@ body {
     <!-- ADMIN MANAGEMENT PORTAL (ROLE 4: ADMIN) -->
     <section id="adminScreen" class="view-screen" style="display: none;">
       <div class="dashboard-header">
-        <div>
-          <h2>SYSTEM ADMINISTRATION PORTAL</h2>
-          <p>Complete control over users, departments, classes, subjects, student datasets & vision parameters.</p>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 46px; height: 46px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 12px rgba(255,215,0,0.4);" />
+          <div>
+            <h2>SYSTEM ADMINISTRATION PORTAL</h2>
+            <p>V.S.B. Engineering College — User, Dataset & Vision Engine Control Panel</p>
+          </div>
         </div>
       </div>
 

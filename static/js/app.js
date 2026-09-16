@@ -712,6 +712,10 @@ async function loadHodDashboard() {
 
     res.classes.forEach(c => {
       const tr = document.createElement('tr');
+      const downloadBtn = c.session_id
+        ? `<button class="btn btn-outline btn-sm" onclick="downloadExcelReport(${c.session_id})">📥 Download Excel</button>`
+        : `<span class="text-muted">No Session</span>`;
+
       tr.innerHTML = `
         <td><strong>${c.class_name}</strong></td>
         <td>${c.total_students}</td>
@@ -719,6 +723,7 @@ async function loadHodDashboard() {
         <td><span class="text-danger">${c.absent}</span></td>
         <td><strong>${c.percentage}</strong></td>
         <td><span class="badge ${c.status === 'CONFIRMED' ? 'badge-present' : 'badge-review'}">${c.status}</span></td>
+        <td>${downloadBtn}</td>
       `;
       tbody.appendChild(tr);
     });

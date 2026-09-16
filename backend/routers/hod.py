@@ -48,11 +48,24 @@ def get_hod_dashboard(
             total = session.total_students or 1
             pct = round((present / total) * 100, 2)
             st_status = session.status
+            sess_id = session.id
         else:
-            present = 0
-            absent = 0
-            pct = 0.0
-            st_status = "NO_DATA"
+            latest_sess = db.query(AttendanceSession).filter(
+                AttendanceSession.class_id == c.id
+            ).order_by(AttendanceSession.created_at.desc()).first()
+            if latest_sess:
+                present = latest_sess.present_count
+                absent = latest_sess.absent_count
+                total = latest_sess.total_students or 1
+                pct = round((present / total) * 100, 2)
+                st_status = latest_sess.status
+                sess_id = latest_sess.id
+            else:
+                present = 0
+                absent = 0
+                pct = 0.0
+                st_status = "NO_DATA"
+                sess_id = None
 
         dept_present += present
         dept_absent += absent
@@ -60,6 +73,7 @@ def get_hod_dashboard(
         class_stats.append({
             "class_id": c.id,
             "class_name": c.name,
+            "session_id": sess_id,
             "total_students": st_count,
             "present": present,
             "absent": absent,

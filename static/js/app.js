@@ -9,6 +9,13 @@ const state = {
   reviewItems: {}
 };
 
+// Global Chart Instances
+let chartInstances = {
+  staffTrend: null,
+  hodDoughnut: null,
+  hodBar: null
+};
+
 // API Helper
 async function apiCall(endpoint, options = {}) {
   const headers = options.headers || {};
@@ -157,6 +164,16 @@ function setupEventListeners() {
   document.getElementById('createDeptForm').addEventListener('submit', handleCreateDept);
   document.getElementById('createClassForm').addEventListener('submit', handleCreateClass);
   document.getElementById('createSubjectForm').addEventListener('submit', handleCreateSubject);
+
+  const closeModalBtn = document.getElementById('closeStudentModalBtn');
+  if (closeModalBtn) closeModalBtn.addEventListener('click', closeStudentModal);
+
+  const modalBackdrop = document.getElementById('studentDetailModal');
+  if (modalBackdrop) {
+    modalBackdrop.addEventListener('click', (e) => {
+      if (e.target === modalBackdrop) closeStudentModal();
+    });
+  }
 }
 
 function setupKeyboardShortcuts() {
@@ -479,6 +496,8 @@ async function loadStaffDashboard() {
 
     const alertBox = document.getElementById('staffPendingAlert');
     alertBox.style.display = pendingCountTotal > 0 ? 'flex' : 'none';
+
+    renderStaffTrendChart(history);
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -633,6 +652,8 @@ async function loadHodDashboard() {
       `;
       tbody.appendChild(tr);
     });
+
+    renderHodCharts(res);
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -726,6 +747,7 @@ async function loadStudentRoster(classId) {
         <div class="st-id">${st.student_id}</div>
         <div class="st-name">${st.name}</div>
       `;
+      card.addEventListener('click', () => openStudentModal(st));
       grid.appendChild(card);
     });
   } catch (err) {
@@ -862,3 +884,124 @@ async function handleCreateSubject(e) {
     showToast(err.message, 'error');
   }
 }
+
+/* ==========================================================================
+   ANALYTICS CHARTS & STUDENT MODAL HELPERS
+   ========================================================================== */
+function renderStaffTrendChart(sessions) {
+  const ctx = document.getElementById('staffTrendChart')?.getContext('2d');
+  if (!ctx || typeof Chart === 'undefined') return;
+
+  if (chartInstances.staffTrend) {
+    chartInstances.staffTrend.destroy();
+  }
+
+  const labels = sessions.slice(0, 10).reverse().map(s => `${s.class_name} (${s.date})`);
+  const dataPresent = sessions.slice(0, 10).reverse().map(s => (s.total_students ? Math.round((s.present / s.total_students) * 100) : 0));
+
+  chartInstances.staffTrend = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels.length ? labels : ['No Sessions'],
+      datasets: [{
+        label: 'Attendance Rate (%)',
+        data: dataPresent.length ? dataPresent : [0],
+        borderColor: '#38BDF8',
+        backgroundColor: 'rgba(56, 189, 248, 0.15)',
+        fill: true,
+        tension: 0.4,
+        pointBackgroundColor: '#38BDF8',
+        pointRadius: 5
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#9CA3AF' } }
+      },
+      scales: {
+        x: { ticks: { color: '#9CA3AF' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { min: 0, max: 100, ticks: { color: '#9CA3AF' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
+    }
+  });
+}
+
+function renderHodCharts(res) {
+  const doughnutCtx = document.getElementById('hodAttendanceChart')?.getContext('2d');
+  const barCtx = document.getElementById('hodClassBarChart')?.getContext('2d');
+  if (typeof Chart === 'undefined') return;
+
+  if (doughnutCtx) {
+    if (chartInstances.hodDoughnut) chartInstances.hodDoughnut.destroy();
+    const presentCount = res.dept_present || 0;
+    const absentCount = Math.max(0, (res.total_students || 0) - presentCount);
+
+    chartInstances.hodDoughnut = new Chart(doughnutCtx, {
+      type: 'doughnut',
+      data: {
+        labels: ['Present', 'Absent'],
+        datasets: [{
+          data: [presentCount, absentCount],
+          backgroundColor: ['#10B981', '#EF4444'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#F9FAFB', font: { weight: 'bold' } } }
+        }
+      }
+    });
+  }
+
+  if (barCtx) {
+    if (chartInstances.hodBar) chartInstances.hodBar.destroy();
+    const classLabels = res.classes.map(c => c.class_name);
+    const classPcts = res.classes.map(c => parseFloat(c.percentage.replace('%', '')) || 0);
+
+    chartInstances.hodBar = new Chart(barCtx, {
+      type: 'bar',
+      data: {
+        labels: classLabels.length ? classLabels : ['No Classes'],
+        datasets: [{
+          label: 'Attendance %',
+          data: classPcts.length ? classPcts : [0],
+          backgroundColor: 'rgba(139, 92, 246, 0.7)',
+          borderColor: '#8B5CF6',
+          borderWidth: 1,
+          borderRadius: 8
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#9CA3AF' }, grid: { display: false } },
+          y: { min: 0, max: 100, ticks: { color: '#9CA3AF' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+        }
+      }
+    });
+  }
+}
+
+function openStudentModal(st) {
+  const modal = document.getElementById('studentDetailModal');
+  if (!modal) return;
+  document.getElementById('modalStudentName').innerText = st.name;
+  document.getElementById('modalStudentFullName').innerText = st.name;
+  document.getElementById('modalStudentRoll').innerText = `Roll #${st.student_id}`;
+  document.getElementById('modalStudentPhoto').src = st.photo_path || '/static/assets/avatar.png';
+  document.getElementById('modalStudentDeptClass').innerText = `Class: ${st.class_name || 'III AIDS A'}`;
+  modal.style.display = 'flex';
+}
+
+function closeStudentModal() {
+  const modal = document.getElementById('studentDetailModal');
+  if (modal) modal.style.display = 'none';
+}
+

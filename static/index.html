@@ -8,8 +8,12 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body class="dark-theme">
+  <!-- Dynamic Ambient Glow Effects -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
 
   <!-- Top Navigation Bar -->
   <header class="navbar" id="mainNavbar" style="display: none;">
@@ -222,6 +226,19 @@
         <button class="btn btn-warning btn-sm" id="jumpToReviewBtn">Review Pending Now</button>
       </div>
 
+      <!-- Staff Attendance Trend Chart -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <h3>Weekly Class Attendance Trend</h3>
+          <span class="badge badge-info">Live Analytics</span>
+        </div>
+        <div class="card-body">
+          <div class="chart-container" style="position: relative; height:220px; width:100%;">
+            <canvas id="staffTrendChart"></canvas>
+          </div>
+        </div>
+      </div>
+
       <!-- Today's Classes Sessions Table -->
       <div class="card mb-4">
         <div class="card-header">
@@ -304,6 +321,26 @@
         <div class="metric-card highlight">
           <div class="metric-value" id="hodOverallPct">0%</div>
           <div class="metric-label">Overall Attendance %</div>
+        </div>
+      </div>
+
+      <!-- HOD Department Analytics Visualizations Grid -->
+      <div class="grid-2 mb-4">
+        <div class="card">
+          <div class="card-header">
+            <h3>Department Attendance Breakdown</h3>
+          </div>
+          <div class="card-body flex-center" style="position: relative; height:260px;">
+            <canvas id="hodAttendanceChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h3>Class-wise Attendance Rates</h3>
+          </div>
+          <div class="card-body" style="position: relative; height:260px;">
+            <canvas id="hodClassBarChart"></canvas>
+          </div>
         </div>
       </div>
 
@@ -531,6 +568,43 @@
     </section>
 
   </main>
+
+  <!-- Student Profile Detail Modal -->
+  <div id="studentDetailModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalStudentName">Student Profile</h3>
+        <button class="btn-close-modal" id="closeStudentModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="student-profile-hero">
+          <div class="profile-photo-wrapper">
+            <img id="modalStudentPhoto" src="" alt="Student Photo" />
+          </div>
+          <div class="profile-meta">
+            <span class="profile-id-badge" id="modalStudentRoll">Roll #</span>
+            <h4 id="modalStudentFullName">Student Name</h4>
+            <p class="profile-dept-text" id="modalStudentDeptClass">Department & Class</p>
+          </div>
+        </div>
+
+        <div class="metrics-grid-3 my-3">
+          <div class="metric-box sm">
+            <div class="m-val" id="modalStudentSessions">0</div>
+            <div class="m-lbl">Sessions Attended</div>
+          </div>
+          <div class="metric-box sm success">
+            <div class="m-val" id="modalStudentPct">100%</div>
+            <div class="m-lbl">Attendance Rate</div>
+          </div>
+          <div class="metric-box sm highlight">
+            <div class="m-val" id="modalStudentEmbedding">512-D</div>
+            <div class="m-lbl">Vision Vector</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Notification Toast Container -->
   <div id="toastContainer" class="toast-container"></div>

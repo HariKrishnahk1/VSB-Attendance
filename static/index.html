@@ -272,18 +272,19 @@ body {
       <div class="smartboard-container">
         <!-- Smartboard Header Banner -->
         <div class="smartboard-header">
-          <div class="smartboard-title" style="display: flex; align-items: center; gap: 1rem;">
-            <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 46px; height: 46px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 12px rgba(255,215,0,0.4);" />
+          <div class="smartboard-title" style="display: flex; align-items: center; gap: 1.25rem;">
+            <img src="/static/img/logo.png" alt="V.S.B. Logo" style="width: 52px; height: 52px; object-fit: contain; border-radius: 50%; background: #FFF; padding: 2px; box-shadow: 0 0 16px rgba(255,215,0,0.4);" />
             <div>
               <h2>AUTOMATED CLASSROOM ATTENDANCE</h2>
               <div class="smartboard-meta">
-              <span class="meta-tag" id="sbClassDisplay">Class: III AI & DS - A</span>
-              <span class="meta-tag">
-                Subject: 
-                <select id="sbSubjectSelect" class="sb-select"></select>
-              </span>
-              <span class="meta-tag" id="sbDateDisplay">Date: --</span>
-              <span class="meta-tag" id="sbTimeDisplay">Time: --</span>
+                <span class="meta-tag" id="sbClassDisplay">Class: III AI & DS - A</span>
+                <span class="meta-tag">
+                  Subject: 
+                  <select id="sbSubjectSelect" class="sb-select"></select>
+                </span>
+                <span class="meta-tag" id="sbDateDisplay">Date: --</span>
+                <span class="meta-tag" id="sbTimeDisplay">Time: --</span>
+              </div>
             </div>
           </div>
           <div class="camera-status-pill ready" id="cameraStatusPill">
@@ -295,30 +296,41 @@ body {
         <div class="smartboard-grid">
           <!-- Webcam & Capture Box -->
           <div class="webcam-card">
-            <div class="webcam-viewport">
+            <div class="webcam-viewport" id="webcamViewport">
+              <!-- HUD Tech Corner Overlay Brackets -->
+              <div class="hud-corner top-left"></div>
+              <div class="hud-corner top-right"></div>
+              <div class="hud-corner bottom-left"></div>
+              <div class="hud-corner bottom-right"></div>
+              <div class="hud-live-tag">LIVE FEED | 1080P AI VISION</div>
+
               <video id="webcamVideo" autoplay playsinline muted></video>
               <canvas id="webcamCanvas"></canvas>
 
               <div class="camera-overlay-box" id="cameraOverlay">
                 <div class="scan-grid-effect"></div>
                 <div class="camera-placeholder" id="cameraPlaceholder">
-                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  <p>Click "START ATTENDANCE" to activate webcam</p>
+                  <div class="cam-icon-glow">
+                    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  </div>
+                  <h3>SMARTBOARD VISION CAMERA</h3>
+                  <p>Click <strong>"START ATTENDANCE SCAN"</strong> below to activate recognition</p>
                 </div>
               </div>
 
               <!-- Scanning Progress Bar Overlay -->
               <div class="scan-progress-overlay" id="scanProgressOverlay" style="display: none;">
+                <div class="scanner-laser"></div>
                 <div class="scan-counter"><span id="scanSeconds">3.5</span>s</div>
-                <div class="scan-text">Capturing multi-frame evidence...</div>
+                <div class="scan-text">Multi-frame Neural Facial Recognition Active...</div>
                 <div class="progress-bar"><div class="progress-fill" id="scanProgressFill"></div></div>
               </div>
             </div>
 
             <div class="webcam-controls">
-              <button class="btn btn-success btn-huge btn-block" id="startAttendanceBtn">
+              <button class="btn btn-success btn-huge btn-block pulse-btn" id="startAttendanceBtn">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                [ START ATTENDANCE ]
+                [ START ATTENDANCE SCAN ]
               </button>
             </div>
           </div>
@@ -326,7 +338,7 @@ body {
           <!-- Attendance Results Panel -->
           <div class="results-card">
             <div class="results-header">
-              <h3>ATTENDANCE RESULTS</h3>
+              <h3>LIVE ATTENDANCE ROSTER</h3>
               <span class="session-badge" id="sbSessionStatus">NOT STARTED</span>
             </div>
 

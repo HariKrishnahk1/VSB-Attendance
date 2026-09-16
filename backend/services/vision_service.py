@@ -65,60 +65,47 @@ class VisionEngine:
     def detect_faces(self, img_bgr):
         """
         Detects faces across a dense 70-80 student classroom layout.
-        Uses 3x3 High-Density Grid Tiling + Full Frame Pass.
+        Uses Fast-Path Full Frame Pass + Conditional 3x3 Grid Tiling.
         """
         h, w, _ = img_bgr.shape
         all_detected_faces = []
 
-        # 1. Full Frame High-Res Pass
+        # 1. Fast Full-Frame Pass
         self.detector.setInputSize((w, h))
         _, faces_main = self.detector.detect(img_bgr)
         if faces_main is not None:
             for f in faces_main:
                 all_detected_faces.append(f)
 
-        # 2. 3x3 Grid Tiling Pass (scans all 70-80 student seating positions in high detail)
-        qw, qh = int(w * 0.4), int(h * 0.4)
-        overlap_x = int(w * 0.3)
-        overlap_y = int(h * 0.3)
+        # 2. If no faces detected in full frame, run high-resolution grid tiling
+        if len(all_detected_faces) == 0:
+            qw, qh = int(w * 0.4), int(h * 0.4)
+            overlap_x = int(w * 0.3)
+            overlap_y = int(h * 0.3)
 
-        tiles = [
-            # Row 1 (Back Row Students - 25 to 30 ft)
-            (0, 0, qw, qh), (overlap_x, 0, qw, qh), (w - qw, 0, qw, qh),
-            # Row 2 (Middle Row Students - 15 to 20 ft)
-            (0, overlap_y, qw, qh), (overlap_x, overlap_y, qw, qh), (w - qw, overlap_y, qw, qh),
-            # Row 3 (Front Row Students - 5 to 10 ft)
-            (0, h - qh, qw, qh), (overlap_x, h - qh, qw, qh), (w - qw, h - qh, qw, qh)
-        ]
+            tiles = [
+                (0, 0, qw, qh), (overlap_x, 0, qw, qh), (w - qw, 0, qw, qh),
+                (0, overlap_y, qw, qh), (overlap_x, overlap_y, qw, qh), (w - qw, overlap_y, qw, qh),
+                (0, h - qh, qw, qh), (overlap_x, h - qh, qw, qh), (w - qw, h - qh, qw, qh)
+            ]
 
-        for tx, ty, tw, th in tiles:
-            tile_crop = img_bgr[ty:ty+th, tx:tx+tw]
-            if tile_crop.size == 0:
-                continue
+            for tx, ty, tw, th in tiles:
+                tile_crop = img_bgr[ty:ty+th, tx:tx+tw]
+                if tile_crop.size == 0:
+                    continue
 
-            # Upscale 1.6x for distant small face clarity
-            scaled_tile = cv2.resize(tile_crop, (int(tw * 1.6), int(th * 1.6)), interpolation=cv2.INTER_CUBIC)
-            sth, stw, _ = scaled_tile.shape
-            self.detector.setInputSize((stw, sth))
-
-            _, tile_faces = self.detector.detect(scaled_tile)
-            if tile_faces is not None:
-                scale_back = 1.0 / 1.6
-                for f in tile_faces:
-                    f_mapped = f.copy()
-                    f_mapped[0] = tx + f[0] * scale_back
-                    f_mapped[1] = ty + f[1] * scale_back
-                    f_mapped[2] = f[2] * scale_back
-                    f_mapped[3] = f[3] * scale_back
-                    for l_idx in range(4, 14, 2):
-                        f_mapped[l_idx] = tx + f[l_idx] * scale_back
-                        f_mapped[l_idx + 1] = ty + f[l_idx + 1] * scale_back
-                    all_detected_faces.append(f_mapped)
+                self.detector.setInputSize((tw, th))
+                _, tile_faces = self.detector.detect(tile_crop)
+                if tile_faces is not None:
+                    for f in tile_faces:
+                        f_mapped = f.copy()
+                        f_mapped[0] = tx + f[0]
+                        f_mapped[1] = ty + f[1]
+                        all_detected_faces.append(f_mapped)
 
         if not all_detected_faces:
             return []
 
-        # Deduplicate overlapping bounding boxes (NMS IoU)
         return self._suppress_duplicate_faces(all_detected_faces)
 
     def _suppress_duplicate_faces(self, face_list, iou_threshold=0.35):

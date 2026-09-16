@@ -319,7 +319,7 @@ async function startSmartboardAttendance() {
 
   overlay.style.display = 'flex';
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = 'Capturing 3.5s...';
+  statusText.innerText = 'Scanning Classroom...';
 
   const video = document.getElementById('webcamVideo');
   const canvas = document.createElement('canvas');
@@ -328,8 +328,8 @@ async function startSmartboardAttendance() {
   const ctx = canvas.getContext('2d');
 
   const capturedFrames = [];
-  const captureDurationMs = 3500;
-  const intervalMs = 200;
+  const captureDurationMs = 1200;
+  const intervalMs = 300;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
@@ -340,21 +340,21 @@ async function startSmartboardAttendance() {
 
     if (state.webcamStream && video.readyState === 4) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.8));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.75));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.8));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.75));
     }
 
     if (elapsed >= captureDurationMs) {
       clearInterval(timer);
       overlay.style.display = 'none';
       pill.className = 'camera-status-pill ready';
-      statusText.innerText = 'Processing...';
+      statusText.innerText = '⚡ AI Processing...';
 
       sendFramesForProcessing(subjectId, capturedFrames);
     }

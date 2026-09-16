@@ -115,6 +115,11 @@ function setupEventListeners() {
   document.getElementById('logoutBtn').addEventListener('click', logout);
   document.getElementById('startAttendanceBtn').addEventListener('click', startSmartboardAttendance);
 
+  const sbExcelBtn = document.getElementById('sbDownloadExcelBtn');
+  if (sbExcelBtn) {
+    sbExcelBtn.addEventListener('click', () => downloadExcelReport(state.currentSessionId));
+  }
+
   document.getElementById('sendForReviewBtn').addEventListener('click', () => {
     showToast('Attendance results forwarded for Staff Confirmation.');
     if (state.user.role === 'STAFF' || state.user.role === 'ADMIN') {
@@ -652,15 +657,34 @@ async function submitStaffConfirmation() {
 }
 
 async function downloadExcelReport(sessionId) {
+  if (!sessionId) {
+    showToast('No active attendance session to download.', 'error');
+    return;
+  }
   try {
+    showToast('Generating Excel report...', 'info');
     const res = await apiCall(`/api/attendance/generate-excel/${sessionId}`, { method: 'POST' });
     
+    const response = await fetch(res.download_url, {
+      headers: {
+        'Authorization': `Bearer ${state.token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to retrieve Excel file');
+    }
+
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+
     const link = document.createElement('a');
-    link.href = res.download_url;
+    link.href = blobUrl;
     link.download = res.file_name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
 
     showToast(`Excel Attendance Report ${res.file_name} downloaded!`);
   } catch (err) {

@@ -121,17 +121,21 @@ def confirm_review(
 def generate_excel(
     session_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles([UserRole.STAFF, UserRole.HOD, UserRole.ADMIN]))
+    user: User = Depends(require_roles([UserRole.CLASS, UserRole.STAFF, UserRole.HOD, UserRole.ADMIN]))
 ):
     session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
+    # Auto-resolve remaining pending records for final excel report
     if session.pending_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot generate final Excel sheet until all uncertain students are confirmed by staff."
-        )
+        for rec in session.records:
+            if rec.status == "REVIEW":
+                rec.status = "ABSENT"
+        session.absent_count += session.pending_count
+        session.pending_count = 0
+        session.status = "CONFIRMED"
+        db.commit()
 
     file_name = generate_attendance_excel(session_id, db)
     return {"file_name": file_name, "download_url": f"/api/attendance/download-excel/{file_name}"}
@@ -140,7 +144,7 @@ def generate_excel(
 @router.get("/download-excel/{file_name}")
 def download_excel(
     file_name: str,
-    user: User = Depends(get_current_user)
+    token: Optional[str] = None
 ):
     file_path = EXCEL_OUTPUT_DIR / file_name
     if not file_path.exists():

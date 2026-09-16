@@ -31,9 +31,11 @@ async function apiCall(endpoint, options = {}) {
   options.headers = headers;
 
   const response = await fetch(endpoint, options);
-  if (response.status === 401) {
-    logout();
-    throw new Error('Session expired. Please login again.');
+  if (response.status === 401 && endpoint !== '/api/auth/login') {
+    if (state.token) {
+      logout();
+      throw new Error('Session expired. Please login again.');
+    }
   }
   
   const data = await response.json();

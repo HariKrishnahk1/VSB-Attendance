@@ -302,10 +302,6 @@ body {
               <h2>AUTOMATED CLASSROOM ATTENDANCE</h2>
               <div class="smartboard-meta">
                 <span class="meta-tag" id="sbClassDisplay">Class: III AI & DS - A</span>
-                <span class="meta-tag">
-                  Subject: 
-                  <select id="sbSubjectSelect" class="sb-select"></select>
-                </span>
                 <span class="meta-tag" id="sbDateDisplay">Date: --</span>
                 <span class="meta-tag" id="sbTimeDisplay">Time: --</span>
               </div>
@@ -483,7 +479,6 @@ body {
             <thead>
               <tr>
                 <th>Class</th>
-                <th>Subject</th>
                 <th>Date & Time</th>
                 <th>Total</th>
                 <th>Present</th>
@@ -622,7 +617,7 @@ body {
       <div class="admin-tab-bar">
         <button class="admin-tab active" data-tab="tabDataset">Student ZIP Dataset Upload</button>
         <button class="admin-tab" data-tab="tabUsers">User Management</button>
-        <button class="admin-tab" data-tab="tabStructure">Depts, Classes & Subjects</button>
+        <button class="admin-tab" data-tab="tabStructure">Depts & Classes</button>
         <button class="admin-tab" data-tab="tabAudit">System Audit Logs</button>
       </div>
 
@@ -750,7 +745,7 @@ body {
 
       <!-- Tab 3: Structure -->
       <div id="tabStructure" class="admin-tab-content">
-        <div class="grid-3">
+        <div class="grid-2">
           <!-- Department Creation -->
           <div class="card">
             <div class="card-header"><h3>Departments</h3></div>
@@ -774,20 +769,6 @@ body {
                 <button type="submit" class="btn btn-primary btn-block">Add Class</button>
               </form>
               <ul class="list-group mt-3" id="classListGroup"></ul>
-            </div>
-          </div>
-
-          <!-- Subject Creation -->
-          <div class="card">
-            <div class="card-header"><h3>Subjects</h3></div>
-            <div class="card-body">
-              <form id="createSubjectForm">
-                <div class="form-group"><label>Subject Name</label><input type="text" id="subjectNameInput" required placeholder="e.g. Machine Learning" /></div>
-                <div class="form-group"><label>Subject Code</label><input type="text" id="subjectCodeInput" required placeholder="e.g. ML302" /></div>
-                <div class="form-group"><label>Class</label><select id="subjectClassSelect" class="form-select" required></select></div>
-                <button type="submit" class="btn btn-primary btn-block">Add Subject</button>
-              </form>
-              <ul class="list-group mt-3" id="subjectListGroup"></ul>
             </div>
           </div>
         </div>

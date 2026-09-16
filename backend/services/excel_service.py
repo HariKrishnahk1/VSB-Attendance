@@ -52,7 +52,6 @@ def generate_attendance_excel(session_id: int, db_session) -> str:
     # 2. Institutional Metadata Section
     dept_name = session.class_room.department.name if session.class_room and session.class_room.department else "AI & DS"
     class_name = session.class_room.name if session.class_room else "N/A"
-    subject_name = f"{session.subject.name} ({session.subject.code})" if session.subject else "N/A"
     date_str = session.session_date
     total = session.total_students or 0
     present = session.present_count or 0
@@ -65,8 +64,8 @@ def generate_attendance_excel(session_id: int, db_session) -> str:
     metadata_rows = [
         ("Department:", dept_name, "Date:", date_str),
         ("Class:", class_name, "Total Students:", total),
-        ("Subject:", subject_name, "Present:", present),
-        ("Staff Confirmed:", confirmed_by_name, "Absent:", absent),
+        ("Staff Confirmed:", confirmed_by_name, "Present:", present),
+        ("", "", "Absent:", absent),
         ("", "", "Attendance Percentage:", f"{pct}%")
     ]
 
@@ -83,7 +82,7 @@ def generate_attendance_excel(session_id: int, db_session) -> str:
     r_idx += 1
 
     # 3. Student Roster Table Headers
-    headers = ["S.No", "Student ID", "Student Name", "Class", "Date", "Subject", "Status", "Recognition Confidence", "Confirmed By"]
+    headers = ["S.No", "Student ID", "Student Name", "Class", "Date", "Status", "Recognition Confidence", "Confirmed By"]
     ws.row_dimensions[r_idx].height = 28
 
     for c_idx, h_text in enumerate(headers, start=1):
@@ -108,19 +107,19 @@ def generate_attendance_excel(session_id: int, db_session) -> str:
         conf_user = db_session.query(User).filter(User.id == rec.confirmed_by_user_id).first()
         conf_by = conf_user.full_name if conf_user else "Auto Recognition"
 
-        row_data = [s_no, st_id, st_name, class_name, date_str, session.subject.name if session.subject else "N/A", st_status, st_conf, conf_by]
+        row_data = [s_no, st_id, st_name, class_name, date_str, st_status, st_conf, conf_by]
 
         for c_idx, val in enumerate(row_data, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
             cell.font = VAL_FONT
             cell.border = thin_border
-            if c_idx in [1, 2, 4, 5, 8]:
+            if c_idx in [1, 2, 4, 5, 7]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
 
             # Status highlight styling
-            if c_idx == 7:
+            if c_idx == 6:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 if st_status == "PRESENT":
                     cell.fill = PRESENT_FILL

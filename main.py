@@ -91,16 +91,7 @@ def seed_database():
             db.commit()
             db.refresh(c_aids)
 
-        # 3. Subject
-        subj_ai = db.query(Subject).filter(Subject.code == "AI301").first()
-        if not subj_ai:
-            subj_ai = Subject(name="Artificial Intelligence", code="AI301", class_id=c_aids.id)
-            db.add(subj_ai)
-            subj_ml = Subject(name="Machine Learning", code="ML302", class_id=c_aids.id)
-            db.add(subj_ml)
-            db.commit()
-
-        # 4. Default Accounts
+        # 3. Default Accounts
         # Admin
         if not db.query(User).filter(User.username == "admin").first():
             db.add(User(

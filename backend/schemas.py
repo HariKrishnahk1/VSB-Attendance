@@ -54,7 +54,7 @@ class SubjectCreate(BaseModel):
 
 class FrameProcessRequest(BaseModel):
     class_id: int
-    subject_id: int
+    subject_id: Optional[int] = None
     frames: List[str]  # Base64 encoded JPEG strings captured from webcam
 
 

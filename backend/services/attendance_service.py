@@ -18,10 +18,10 @@ from backend.services.vision_service import get_vision_engine
 
 def process_smartboard_session(
     class_id: int,
-    subject_id: int,
-    taken_by_user_id: int,
-    base64_frames: list[str],
-    db_session: Session
+    subject_id: int = None,
+    taken_by_user_id: int = 1,
+    base64_frames: list[str] = [],
+    db_session: Session = None
 ) -> dict:
     vision = get_vision_engine()
 

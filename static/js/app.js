@@ -173,7 +173,6 @@ function setupEventListeners() {
   document.getElementById('createUserForm').addEventListener('submit', handleCreateUser);
   document.getElementById('createDeptForm').addEventListener('submit', handleCreateDept);
   document.getElementById('createClassForm').addEventListener('submit', handleCreateClass);
-  document.getElementById('createSubjectForm').addEventListener('submit', handleCreateSubject);
 
   const searchInput = document.getElementById('sbSearchInput');
   if (searchInput) {
@@ -276,27 +275,10 @@ async function initSmartboardView() {
     const classes = await apiCall('/api/admin/classes');
     if (classes.length > 0) {
       document.getElementById('sbClassDisplay').innerText = `Class: ${classes[0].name}`;
-      loadSubjectsForClass(classes[0].id);
     }
     initWebcam();
   } catch (err) {
     showToast(err.message, 'error');
-  }
-}
-
-async function loadSubjectsForClass(classId) {
-  try {
-    const subjects = await apiCall(`/api/admin/subjects?class_id=${classId}`);
-    const select = document.getElementById('sbSubjectSelect');
-    select.innerHTML = '';
-    subjects.forEach(sub => {
-      const opt = document.createElement('option');
-      opt.value = sub.id;
-      opt.innerText = `${sub.name} (${sub.code})`;
-      select.appendChild(opt);
-    });
-  } catch (err) {
-    console.error(err);
   }
 }
 
@@ -331,12 +313,6 @@ function stopWebcam() {
 
 async function startSmartboardAttendance() {
   if (state.isCapturing) return;
-
-  const subjectId = document.getElementById('sbSubjectSelect').value;
-  if (!subjectId) {
-    showToast('Please select a subject first.', 'error');
-    return;
-  }
 
   state.isCapturing = true;
   const overlay = document.getElementById('scanProgressOverlay');
@@ -383,12 +359,12 @@ async function startSmartboardAttendance() {
       pill.className = 'camera-status-pill ready';
       statusText.innerText = '⚡ AI Processing...';
 
-      sendFramesForProcessing(subjectId, capturedFrames);
+      sendFramesForProcessing(capturedFrames);
     }
   }, intervalMs);
 }
 
-async function sendFramesForProcessing(subjectId, frames) {
+async function sendFramesForProcessing(frames) {
   try {
     const classes = await apiCall('/api/admin/classes');
     const classId = classes[0].id;
@@ -397,7 +373,6 @@ async function sendFramesForProcessing(subjectId, frames) {
       method: 'POST',
       body: {
         class_id: classId,
-        subject_id: parseInt(subjectId),
         frames: frames
       }
     });
@@ -533,7 +508,6 @@ async function loadStaffDashboard() {
 
       tr.innerHTML = `
         <td><strong>${s.class_name}</strong></td>
-        <td>${s.subject_name}</td>
         <td>${s.date} ${s.time}</td>
         <td>${s.total_students}</td>
         <td><span class="text-success">${s.present}</span></td>
@@ -936,24 +910,6 @@ async function handleCreateClass(e) {
       }
     });
     showToast('Class added!');
-    loadAdminStructure();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-async function handleCreateSubject(e) {
-  e.preventDefault();
-  try {
-    await apiCall('/api/admin/subjects', {
-      method: 'POST',
-      body: {
-        name: document.getElementById('subjectNameInput').value,
-        code: document.getElementById('subjectCodeInput').value,
-        class_id: parseInt(document.getElementById('subjectClassSelect').value)
-      }
-    });
-    showToast('Subject added!');
     loadAdminStructure();
   } catch (err) {
     showToast(err.message, 'error');

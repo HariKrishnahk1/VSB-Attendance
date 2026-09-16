@@ -122,7 +122,7 @@ class AttendanceSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
-    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=True)
     taken_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     session_date = Column(String(20), nullable=False)  # YYYY-MM-DD
     session_time = Column(String(20), nullable=False)  # HH:MM:SS

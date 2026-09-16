@@ -49,11 +49,9 @@ def test_smartboard_session(tokens):
     print("\n--- 3. Testing Smartboard Multi-Frame Attendance Capture ---")
     class_headers = {"Authorization": f"Bearer {tokens['CLASS']}"}
     
-    # Get classes and subjects
+    # Get classes
     classes = client.get("/api/admin/classes").json()
     class_id = classes[0]["id"]
-    subjects = client.get(f"/api/admin/subjects?class_id={class_id}").json()
-    subject_id = subjects[0]["id"]
 
     # Generate 5 sample frames (1x1 transparent JPEG)
     dummy_b64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
@@ -61,7 +59,7 @@ def test_smartboard_session(tokens):
 
     res = client.post(
         "/api/attendance/process-frames",
-        json={"class_id": class_id, "subject_id": subject_id, "frames": frames},
+        json={"class_id": class_id, "frames": frames},
         headers=class_headers
     )
     assert res.status_code == 200, f"Process frames failed: {res.text}"

@@ -142,9 +142,17 @@ class VisionEngine:
         return inter_area / union_area if union_area > 0 else 0.0
 
     def extract_embedding(self, img_bgr, face_data):
-        w, h = face_data[2], face_data[3]
+        """
+        Extracts 128-D facial feature vector using SFace landmark alignment and L2 normalization.
+        """
+        aligned_face = None
+        try:
+            if len(face_data) >= 14:
+                aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
+        except Exception:
+            aligned_face = None
 
-        if w < 50 or h < 50:
+        if aligned_face is None or aligned_face.size == 0:
             box = face_data[:4].astype(int)
             x, y, bw, bh = box
             img_h, img_w, _ = img_bgr.shape
@@ -154,22 +162,24 @@ class VisionEngine:
             if crop.size > 0:
                 aligned_face = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_CUBIC)
             else:
-                aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
-        else:
-            aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
+                return np.zeros(128, dtype=np.float32)
 
         feature = self.recognizer.feature(aligned_face)
-        return feature.flatten()
+        feat_flat = feature.flatten().astype(np.float32)
+        norm = np.linalg.norm(feat_flat)
+        if norm > 0:
+            feat_flat = feat_flat / norm
+        return feat_flat
 
     def compare_embeddings_batch(self, detected_vec, ref_matrix):
         """
-        Fast Vectorized Cosine Similarity for 70-80 students in < 1ms.
-        ref_matrix: (N_students, 128) numpy array
+        Fast Vectorized Cosine Similarity across multi-template embedding matrix.
+        ref_matrix: (N_total_embeddings, 128) numpy array
         detected_vec: (128,) numpy array
-        Returns: numpy array of cosine similarity scores for all N_students.
+        Returns: numpy array of cosine similarity scores.
         """
         if ref_matrix.size == 0:
-            return np.array([])
+            return np.array([], dtype=np.float32)
         
         # Unit normalize
         norm_det = np.linalg.norm(detected_vec)
@@ -182,7 +192,7 @@ class VisionEngine:
         refs_unit = ref_matrix / norm_refs
 
         scores = np.dot(refs_unit, det_unit)
-        return scores
+        return scores.flatten()
 
     def compare_embeddings(self, emb1, emb2):
         f1 = np.array(emb1, dtype=np.float32).reshape(1, -1)
@@ -305,23 +315,30 @@ def process_zip_dataset(zip_file_path: str, class_id: int, db_session):
                         student.name = student_name
                         student.photo_path = f"/static/uploads/student_photos/{saved_photo_name}"
 
-                    db_session.query(StudentFaceEmbedding).filter(
-                        StudentFaceEmbedding.student_id == student.id
-                    ).delete()
-
+                    # Multi-template preservation: Keep existing embeddings, append new template
                     embedding_record = StudentFaceEmbedding(
                         student_id=student.id,
                         embedding_data=json.dumps(res["embedding"]),
                         quality_score=res["quality_score"]
                     )
                     db_session.add(embedding_record)
+
+                    # Limit max embeddings per student to 10 top quality templates
+                    all_embs = db_session.query(StudentFaceEmbedding).filter(
+                        StudentFaceEmbedding.student_id == student.id
+                    ).order_by(StudentFaceEmbedding.quality_score.desc()).all()
+
+                    if len(all_embs) > 10:
+                        for to_del in all_embs[10:]:
+                            db_session.delete(to_del)
+
                     summary["successfully_processed"] += 1
                     summary["details"].append({
                         "filename": filename,
                         "student_id": student_reg,
                         "name": student_name,
                         "status": "SUCCESS",
-                        "message": "Processed successfully"
+                        "message": "Processed & Enriched Facial Model"
                     })
                 else:
                     if status == "NO_FACE":

@@ -38,7 +38,7 @@ def process_smartboard_session(
         Student.class_id == class_id
     ).all()
 
-    # Build student ID list and 2D NumPy embedding matrix for 70-80 students
+    # Build student ID list and 2D NumPy embedding matrix across multi-templates
     student_ids = []
     ref_vectors = []
     for record in embedding_records:
@@ -55,9 +55,9 @@ def process_smartboard_session(
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
     total_frames = len(base64_frames)
-    min_required_hits = max(1, int(total_frames * 0.12))  # Optimized for 70-80 students
+    min_required_hits = max(1, int(total_frames * 0.12))  # Optimized hit threshold for classroom detection
 
-    student_evidence = {s.id: {"scores": [], "crops": []} for s in students}
+    student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None} for s in students}
     unrecognized_crops = []
     frame_overlay_boxes = []
 
@@ -76,7 +76,7 @@ def process_smartboard_session(
             if len(faces) == 0:
                 continue
 
-            frame_boxes = []
+            frame_candidates = []
 
             for face in faces:
                 emb = vision.extract_embedding(img_bgr, face)
@@ -90,13 +90,20 @@ def process_smartboard_session(
                 best_student_id = None
                 best_score = -1.0
 
-                # Fast Vectorized Matrix Comparison across 70-80 student embeddings
+                # Multi-Template Vectorized Cosine Similarity
                 if ref_matrix.size > 0:
                     scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
-                    best_idx = np.argmax(scores_array)
-                    best_score = float(scores_array[best_idx])
-                    if best_score >= THRESHOLD_MEDIUM_CONFIDENCE:
-                        best_student_id = student_ids[best_idx]
+                    student_max_scores = {}
+                    for idx, score_val in enumerate(scores_array):
+                        st_id = student_ids[idx]
+                        if st_id not in student_max_scores or score_val > student_max_scores[st_id]:
+                            student_max_scores[st_id] = float(score_val)
+
+                    if student_max_scores:
+                        top_st_id, top_score = max(student_max_scores.items(), key=lambda item: item[1])
+                        if top_score >= THRESHOLD_MEDIUM_CONFIDENCE:
+                            best_student_id = top_st_id
+                            best_score = top_score
 
                 crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
                 crop_path = REVIEW_CROPS_DIR / crop_filename
@@ -105,19 +112,44 @@ def process_smartboard_session(
                 if crop.size > 0:
                     cv2.imwrite(str(crop_path), crop)
 
-                st_label = "Unknown"
-                if best_student_id and best_score >= THRESHOLD_MEDIUM_CONFIDENCE:
-                    st_obj = student_map[best_student_id]
-                    st_label = f"{st_obj.student_id} ({int(best_score * 100)}%)"
-                    student_evidence[best_student_id]["scores"].append(best_score)
-                    student_evidence[best_student_id]["crops"].append(crop_url)
+                frame_candidates.append({
+                    "face_box": [int(x), int(y), int(w), int(h)],
+                    "best_student_id": best_student_id,
+                    "score": best_score,
+                    "crop_url": crop_url,
+                    "emb": emb
+                })
+
+            # Non-Maximum Identity Suppression (1 Student ID per frame max)
+            assigned_students_this_frame = set()
+            frame_boxes = []
+
+            # Sort candidate face recognitions by score descending
+            frame_candidates.sort(key=lambda c: c["score"], reverse=True)
+
+            for cand in frame_candidates:
+                st_id = cand["best_student_id"]
+                score = cand["score"]
+                crop_url = cand["crop_url"]
+                box = cand["face_box"]
+
+                if st_id and st_id not in assigned_students_this_frame and score >= THRESHOLD_MEDIUM_CONFIDENCE:
+                    assigned_students_this_frame.add(st_id)
+                    st_obj = student_map[st_id]
+                    st_label = f"{st_obj.student_id} ({int(score * 100)}%)"
+
+                    student_evidence[st_id]["scores"].append(score)
+                    student_evidence[st_id]["crops"].append(crop_url)
+                    if student_evidence[st_id]["best_emb"] is None or score > max(student_evidence[st_id]["scores"]):
+                        student_evidence[st_id]["best_emb"] = cand["emb"]
                 else:
-                    unrecognized_crops.append({"crop_url": crop_url, "score": best_score})
+                    st_label = "Unknown"
+                    unrecognized_crops.append({"crop_url": crop_url, "score": score})
 
                 frame_boxes.append({
-                    "box": [int(x), int(y), int(w), int(h)],
+                    "box": box,
                     "label": st_label,
-                    "score": round(best_score * 100, 1)
+                    "score": round(max(0.0, score) * 100, 1)
                 })
 
             frame_overlay_boxes.append({"frame_index": frame_idx, "boxes": frame_boxes})
@@ -160,6 +192,21 @@ def process_smartboard_session(
         if max_score >= THRESHOLD_HIGH_CONFIDENCE and frame_hits >= min_required_hits:
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
+            # Online Embedding Auto-Enrichment (Continuous Model Enhancement)
+            if ev.get("best_emb") is not None and max_score >= 0.80:
+                try:
+                    curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
+                        StudentFaceEmbedding.student_id == student.id
+                    ).count()
+                    if curr_emb_count < 10:
+                        enrich_rec = StudentFaceEmbedding(
+                            student_id=student.id,
+                            embedding_data=json.dumps(ev["best_emb"].tolist()),
+                            quality_score=float(max_score)
+                        )
+                        db_session.add(enrich_rec)
+                except Exception as ex:
+                    print(f"[Auto-Enrich] Model enrichment skipped: {ex}")
         elif max_score >= THRESHOLD_MEDIUM_CONFIDENCE:
             status = AttendanceStatus.REVIEW.value
             pending_cnt += 1

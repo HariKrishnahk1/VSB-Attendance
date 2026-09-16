@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,8 +21,31 @@ for directory in [UPLOAD_DIR, STUDENT_PHOTOS_DIR, REVIEW_CROPS_DIR, EXCEL_OUTPUT
     except Exception:
         pass
 
-# Database
+# Database & Pre-existing Files Setup
 if IS_VERCEL:
+    db_tmp = Path("/tmp/attendance.db")
+    db_root = BASE_DIR / "attendance.db"
+    if not db_tmp.exists() and db_root.exists():
+        try:
+            shutil.copy2(db_root, db_tmp)
+            print("[Vercel Setup] Copied initial database to /tmp/attendance.db")
+        except Exception as e:
+            print(f"[Vercel Setup] Error copying database: {e}")
+
+    uploads_root = BASE_DIR / "uploads"
+    if uploads_root.exists():
+        try:
+            for item in uploads_root.rglob("*"):
+                if item.is_file():
+                    rel_path = item.relative_to(uploads_root)
+                    target_path = UPLOAD_DIR / rel_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not target_path.exists():
+                        shutil.copy2(item, target_path)
+            print("[Vercel Setup] Synced pre-existing upload assets to /tmp/uploads")
+        except Exception as e:
+            print(f"[Vercel Setup] Error copying upload assets: {e}")
+
     DATABASE_URL = "sqlite:////tmp/attendance.db"
 else:
     DATABASE_URL = f"sqlite:///{BASE_DIR}/attendance.db"

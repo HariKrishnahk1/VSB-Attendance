@@ -2,6 +2,7 @@ import os
 import shutil
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -136,5 +137,9 @@ def startup_event():
 
 
 @app.get("/")
+@app.get("/index.html")
 def read_root():
+    index_path = BASE_DIR / "static" / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
     return {"message": "AI Automated Attendance Portal API is running", "docs": "/docs"}

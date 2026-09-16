@@ -2,7 +2,7 @@ import os
 import shutil
 from pathlib import Path
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,6 +30,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Explicit Static Handlers
+@app.get("/static/css/styles.css")
+@app.get("/css/styles.css")
+@app.get("/styles.css")
+def get_css():
+    css_path = BASE_DIR / "static" / "css" / "styles.css"
+    if css_path.exists():
+        return FileResponse(str(css_path), media_type="text/css")
+    return Response(status_code=404)
+
+@app.get("/static/js/app.js")
+@app.get("/js/app.js")
+@app.get("/app.js")
+def get_js():
+    js_path = BASE_DIR / "static" / "js" / "app.js"
+    if js_path.exists():
+        return FileResponse(str(js_path), media_type="application/javascript")
+    return Response(status_code=404)
 
 # Mount Static Files & Uploads
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

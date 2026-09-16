@@ -6,7 +6,10 @@ const state = {
   webcamStream: null,
   isCapturing: false,
   currentSessionId: null,
-  reviewItems: {}
+  reviewItems: {},
+  allSmartboardRecords: [],
+  currentFilter: 'ALL',
+  searchQuery: ''
 };
 
 // Global Chart Instances
@@ -166,6 +169,25 @@ function setupEventListeners() {
   document.getElementById('createDeptForm').addEventListener('submit', handleCreateDept);
   document.getElementById('createClassForm').addEventListener('submit', handleCreateClass);
   document.getElementById('createSubjectForm').addEventListener('submit', handleCreateSubject);
+
+  const searchInput = document.getElementById('sbSearchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.searchQuery = e.target.value;
+      filterAndRenderSmartboardTable();
+    });
+  }
+
+  document.querySelectorAll('.shortlist-pill').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      const btn = e.target.closest('.shortlist-pill');
+      if (!btn) return;
+      document.querySelectorAll('.shortlist-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      state.currentFilter = btn.dataset.filter;
+      filterAndRenderSmartboardTable();
+    });
+  });
 
   const closeModalBtn = document.getElementById('closeStudentModalBtn');
   if (closeModalBtn) closeModalBtn.addEventListener('click', closeStudentModal);
@@ -385,7 +407,14 @@ async function sendFramesForProcessing(subjectId, frames) {
     document.getElementById('sbPendingCount').innerText = res.pending_count;
     document.getElementById('sbAbsentCount').innerText = res.absent_count;
 
-    renderSmartboardResultsTable(res.records);
+    const cAll = document.getElementById('countAll'); if (cAll) cAll.innerText = res.total_students;
+    const cPres = document.getElementById('countPresent'); if (cPres) cPres.innerText = res.present_count;
+    const cRev = document.getElementById('countReview'); if (cRev) cRev.innerText = res.pending_count;
+    const cAbs = document.getElementById('countAbsent'); if (cAbs) cAbs.innerText = res.absent_count;
+
+    state.allSmartboardRecords = res.records || [];
+    filterAndRenderSmartboardTable();
+
     if (res.frame_overlays && res.frame_overlays.length > 0) {
       renderLiveCanvasOverlays(res.frame_overlays);
     }
@@ -396,6 +425,21 @@ async function sendFramesForProcessing(subjectId, frames) {
     state.isCapturing = false;
     showToast(err.message, 'error');
   }
+}
+
+function filterAndRenderSmartboardTable() {
+  if (!state.allSmartboardRecords) return;
+
+  const q = (state.searchQuery || '').toLowerCase().trim();
+  const filter = state.currentFilter || 'ALL';
+
+  const filtered = state.allSmartboardRecords.filter(r => {
+    const matchSearch = !q || r.student_id.toLowerCase().includes(q) || r.student_name.toLowerCase().includes(q);
+    const matchFilter = (filter === 'ALL') || (r.status === filter);
+    return matchSearch && matchFilter;
+  });
+
+  renderSmartboardResultsTable(filtered);
 }
 
 function renderLiveCanvasOverlays(frameOverlays) {

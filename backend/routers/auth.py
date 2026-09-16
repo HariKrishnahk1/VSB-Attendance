@@ -11,6 +11,14 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 @router.post("/login", response_model=Token)
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
+    if not user:
+        try:
+            from main import seed_database
+            seed_database()
+            user = db.query(User).filter(User.username == req.username).first()
+        except Exception as e:
+            print(f"[Auth Fallback] Seed error: {e}")
+
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

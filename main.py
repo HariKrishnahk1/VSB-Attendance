@@ -148,11 +148,16 @@ def seed_database():
         db.close()
 
 
+# Synchronously ensure database and default accounts exist on serverless cold start
+try:
+    seed_database()
+except Exception as e:
+    print(f"[Auto-Init] Database seed exception: {e}")
+
+
 @app.on_event("startup")
 def startup_event():
-    print("[Startup] Initializing models and database...")
-    get_vision_engine()
-    seed_database()
+    print("[Startup] App started. Database ready.")
 
 
 @app.get("/")

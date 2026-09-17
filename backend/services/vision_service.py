@@ -126,7 +126,13 @@ class VisionEngine:
         return self._suppress_duplicate_faces(all_detected_faces)
 
     def _suppress_duplicate_faces(self, face_list, iou_threshold=0.35):
-        if not face_list:
+        if face_list is None:
+            return []
+        if isinstance(face_list, np.ndarray):
+            if face_list.size == 0:
+                return []
+            face_list = [f for f in face_list]
+        elif not face_list:
             return []
 
         sorted_faces = sorted(face_list, key=lambda f: f[14], reverse=True)

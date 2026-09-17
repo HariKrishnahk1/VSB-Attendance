@@ -1,6 +1,7 @@
 import os
 import zipfile
 import json
+import threading
 import numpy as np
 import cv2
 import re
@@ -51,6 +52,7 @@ class VisionEngine:
                 f"Vision models missing at {YUNET_MODEL_PATH} or {SFACE_MODEL_PATH}."
             )
 
+        self._model_lock = threading.Lock()
         self.detector = cv2.FaceDetectorYN.create(
             YUNET_MODEL_PATH,
             "",
@@ -78,34 +80,40 @@ class VisionEngine:
         """
         Detects faces across a dense 70-80 student classroom layout.
         Uses Fast-Path Full Frame Pass + CLAHE Contrast + Conditional 3x3 Grid Tiling.
+        Thread-safe OpenCV C++ DNN Execution.
         """
         h, w, _ = img_bgr.shape
         all_detected_faces = []
 
         # 1. Fast Full-Frame Pass
-        self.detector.setInputSize((w, h))
-        _, faces_main = self.detector.detect(img_bgr)
+        with self._model_lock:
+            self.detector.setInputSize((w, h))
+            _, faces_main = self.detector.detect(img_bgr)
+
         if faces_main is not None and len(faces_main) > 0:
             return self._suppress_duplicate_faces(faces_main)
 
         # 2. If no faces detected in full frame, try CLAHE contrast enhanced frame for far rows
         enhanced_img = self.enhance_contrast(img_bgr)
-        _, faces_enh = self.detector.detect(enhanced_img)
+        with self._model_lock:
+            self.detector.setInputSize((w, h))
+            _, faces_enh = self.detector.detect(enhanced_img)
+
         if faces_enh is not None and len(faces_enh) > 0:
             return self._suppress_duplicate_faces(faces_enh)
 
         # 3. High-resolution grid tiling for back rows & dense seating
-        if len(all_detected_faces) == 0:
-            qw, qh = int(w * 0.4), int(h * 0.4)
-            overlap_x = int(w * 0.3)
-            overlap_y = int(h * 0.3)
+        qw, qh = int(w * 0.4), int(h * 0.4)
+        overlap_x = int(w * 0.3)
+        overlap_y = int(h * 0.3)
 
-            tiles = [
-                (0, 0, qw, qh), (overlap_x, 0, qw, qh), (w - qw, 0, qw, qh),
-                (0, overlap_y, qw, qh), (overlap_x, overlap_y, qw, qh), (w - qw, overlap_y, qw, qh),
-                (0, h - qh, qw, qh), (overlap_x, h - qh, qw, qh), (w - qw, h - qh, qw, qh)
-            ]
+        tiles = [
+            (0, 0, qw, qh), (overlap_x, 0, qw, qh), (w - qw, 0, qw, qh),
+            (0, overlap_y, qw, qh), (overlap_x, overlap_y, qw, qh), (w - qw, overlap_y, qw, qh),
+            (0, h - qh, qw, qh), (overlap_x, h - qh, qw, qh), (w - qw, h - qh, qw, qh)
+        ]
 
+        with self._model_lock:
             for tx, ty, tw, th in tiles:
                 tile_crop = img_bgr[ty:ty+th, tx:tx+tw]
                 if tile_crop.size == 0:
@@ -167,27 +175,30 @@ class VisionEngine:
     def extract_embedding(self, img_bgr, face_data):
         """
         Extracts 128-D facial feature vector using SFace landmark alignment and L2 normalization.
+        Thread-safe OpenCV C++ DNN Execution.
         """
         aligned_face = None
-        try:
-            if len(face_data) >= 14:
-                aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
-        except Exception:
-            aligned_face = None
+        with self._model_lock:
+            try:
+                if len(face_data) >= 14:
+                    aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
+            except Exception:
+                aligned_face = None
 
-        if aligned_face is None or aligned_face.size == 0:
-            box = face_data[:4].astype(int)
-            x, y, bw, bh = box
-            img_h, img_w, _ = img_bgr.shape
-            x, y = max(0, x), max(0, y)
-            
-            crop = img_bgr[y:min(y+bh, img_h), x:min(x+bw, img_w)]
-            if crop.size > 0:
-                aligned_face = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_CUBIC)
-            else:
-                return np.zeros(128, dtype=np.float32)
+            if aligned_face is None or aligned_face.size == 0:
+                box = face_data[:4].astype(int)
+                x, y, bw, bh = box
+                img_h, img_w, _ = img_bgr.shape
+                x, y = max(0, x), max(0, y)
+                
+                crop = img_bgr[y:min(y+bh, img_h), x:min(x+bw, img_w)]
+                if crop.size > 0:
+                    aligned_face = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_CUBIC)
+                else:
+                    return np.zeros(128, dtype=np.float32)
 
-        feature = self.recognizer.feature(aligned_face)
+            feature = self.recognizer.feature(aligned_face)
+
         feat_flat = feature.flatten().astype(np.float32)
         norm = np.linalg.norm(feat_flat)
         if norm > 0:

@@ -285,7 +285,9 @@ async function initSmartboardView() {
   try {
     const classes = await apiCall('/api/admin/classes');
     if (classes.length > 0) {
-      document.getElementById('sbClassDisplay').innerText = `Class: ${classes[0].name}`;
+      const activeClass = classes.find(c => c.student_count > 0) || classes[0];
+      state.selectedClassId = activeClass.id;
+      document.getElementById('sbClassDisplay').innerText = `Class: ${activeClass.name}`;
     }
     initWebcam();
   } catch (err) {
@@ -399,7 +401,10 @@ async function startSmartboardAttendance() {
 async function sendFramesForProcessing(frames) {
   try {
     const classes = await apiCall('/api/admin/classes');
-    const classId = classes[0].id;
+    const activeClass = (state.selectedClassId && classes.find(c => c.id === state.selectedClassId)) ||
+                        classes.find(c => c.student_count > 0) ||
+                        classes[0];
+    const classId = activeClass ? activeClass.id : 1;
 
     const res = await apiCall('/api/attendance/process-frames', {
       method: 'POST',

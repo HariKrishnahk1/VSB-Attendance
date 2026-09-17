@@ -39,7 +39,17 @@ def process_smartboard_session(
     ).all()
 
     if not students:
-        raise ValueError(f"No active students found in Class ID {class_id}.")
+        # Smart Fallback: Auto-resolve to the class that contains registered students
+        alt_student = db_session.query(Student).filter(Student.is_active == True).first()
+        if alt_student:
+            class_id = alt_student.class_id
+            students = db_session.query(Student).filter(
+                Student.class_id == class_id,
+                Student.is_active == True
+            ).all()
+
+    if not students:
+        raise ValueError("No registered students found in database. Please upload a student dataset .ZIP file in the Admin Portal.")
 
     student_map = {s.id: s for s in students}
     embedding_records = db_session.query(StudentFaceEmbedding).join(Student).filter(

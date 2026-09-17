@@ -62,128 +62,122 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    total_frames = len(base64_frames)
-    min_required_hits = max(1, int(total_frames * 0.12))  # Optimized hit threshold for classroom detection
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=8)
+    if not selected_keyframes:
+        selected_keyframes = []
 
-    student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None} for s in students}
+    total_frames = len(selected_keyframes)
+    min_required_hits = 1  # Keyframe focal sweep detection threshold
+
+    student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None, "sharpnesses": []} for s in students}
     unrecognized_crops = []
     frame_overlay_boxes = []
 
-    for frame_idx, b64_str in enumerate(base64_frames):
-        try:
-            if "," in b64_str:
-                b64_str = b64_str.split(",")[1]
-            img_bytes = base64.b64decode(b64_str)
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    def _process_frame_worker(kf_item):
+        frame_idx, img_bgr, frame_sharpness = kf_item
+        if img_bgr is None:
+            return frame_idx, []
 
-            if img_bgr is None:
-                continue
+        faces = vision.detect_faces(img_bgr)
+        if not faces:
+            return frame_idx, []
 
-            # Autofocus Hunting & Motion Blur Filtering
-            if vision.is_autofocus_blurry(img_bgr, min_threshold=12.0) and total_frames > 3:
-                # Skip frames severely distorted by lens focus hunting
-                print(f"[AttendanceService] Skipping frame {frame_idx} due to camera focus blur.")
-                continue
+        candidates = []
+        for face in faces:
+            emb = vision.extract_embedding(img_bgr, face)
+            box = face[:4].astype(int)
+            x, y, w, h = box
+            x, y = max(0, x), max(0, y)
 
-            faces = vision.detect_faces(img_bgr)
-            if len(faces) == 0:
-                continue
+            h_img, w_img, _ = img_bgr.shape
+            crop = img_bgr[y:min(y+h, h_img), x:min(x+w, w_img)]
+            local_sharpness = vision.calculate_crop_sharpness(img_bgr, [x, y, w, h])
 
-            frame_candidates = []
+            best_student_id = None
+            best_score = -1.0
 
-            for face in faces:
-                emb = vision.extract_embedding(img_bgr, face)
-                box = face[:4].astype(int)
-                x, y, w, h = box
-                x, y = max(0, x), max(0, y)
+            if ref_matrix.size > 0:
+                scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
+                student_max_scores = {}
+                for idx, score_val in enumerate(scores_array):
+                    st_id = student_ids[idx]
+                    if st_id not in student_max_scores or score_val > student_max_scores[st_id]:
+                        student_max_scores[st_id] = float(score_val)
 
-                h_img, w_img, _ = img_bgr.shape
-                crop = img_bgr[y:min(y+h, h_img), x:min(x+w, w_img)]
-                local_sharpness = vision.calculate_crop_sharpness(img_bgr, [x, y, w, h])
+                if student_max_scores:
+                    top_st_id, top_score = max(student_max_scores.items(), key=lambda item: item[1])
+                    if top_score >= THRESHOLD_MEDIUM_CONFIDENCE:
+                        best_student_id = top_st_id
+                        best_score = top_score
 
-                best_student_id = None
-                best_score = -1.0
+            crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
+            crop_path = REVIEW_CROPS_DIR / crop_filename
+            crop_url = f"/static/uploads/review_crops/{crop_filename}"
+            
+            if crop.size > 0:
+                cv2.imwrite(str(crop_path), crop)
 
-                # Multi-Template Vectorized Cosine Similarity
-                if ref_matrix.size > 0:
-                    scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
-                    student_max_scores = {}
-                    for idx, score_val in enumerate(scores_array):
-                        st_id = student_ids[idx]
-                        if st_id not in student_max_scores or score_val > student_max_scores[st_id]:
-                            student_max_scores[st_id] = float(score_val)
+            candidates.append({
+                "face_box": [int(x), int(y), int(w), int(h)],
+                "best_student_id": best_student_id,
+                "score": best_score,
+                "sharpness": local_sharpness,
+                "crop_url": crop_url,
+                "emb": emb
+            })
+        return frame_idx, candidates
 
-                    if student_max_scores:
-                        top_st_id, top_score = max(student_max_scores.items(), key=lambda item: item[1])
-                        if top_score >= THRESHOLD_MEDIUM_CONFIDENCE:
-                            best_student_id = top_st_id
-                            best_score = top_score
+    # Parallel Multithreaded Execution Across Focal Keyframes
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    max_workers = min(4, os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        frame_results = list(executor.map(_process_frame_worker, selected_keyframes))
 
-                crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
-                crop_path = REVIEW_CROPS_DIR / crop_filename
-                crop_url = f"/static/uploads/review_crops/{crop_filename}"
-                
-                if crop.size > 0:
-                    cv2.imwrite(str(crop_path), crop)
+    # Sort results by frame index order
+    frame_results.sort(key=lambda r: r[0])
 
-                frame_candidates.append({
-                    "face_box": [int(x), int(y), int(w), int(h)],
-                    "best_student_id": best_student_id,
-                    "score": best_score,
-                    "sharpness": local_sharpness,
-                    "crop_url": crop_url,
-                    "emb": emb
-                })
+    for frame_idx, frame_candidates in frame_results:
+        assigned_students_this_frame = set()
+        frame_boxes = []
 
-            # Non-Maximum Identity Suppression (1 Student ID per frame max)
-            assigned_students_this_frame = set()
-            frame_boxes = []
+        # Sort candidate face recognitions by score descending
+        frame_candidates.sort(key=lambda c: c["score"], reverse=True)
 
-            # Sort candidate face recognitions by score descending
-            frame_candidates.sort(key=lambda c: c["score"], reverse=True)
+        for cand in frame_candidates:
+            st_id = cand["best_student_id"]
+            score = cand["score"]
+            crop_url = cand["crop_url"]
+            box = cand["face_box"]
+            sharpness = cand.get("sharpness", 0.0)
 
-            for cand in frame_candidates:
-                st_id = cand["best_student_id"]
-                score = cand["score"]
-                crop_url = cand["crop_url"]
-                box = cand["face_box"]
-                sharpness = cand.get("sharpness", 0.0)
+            calibrated_pct = vision.calibrate_confidence_score(score)
 
-                calibrated_pct = vision.calibrate_confidence_score(score)
+            if st_id and st_id not in assigned_students_this_frame and score >= THRESHOLD_MEDIUM_CONFIDENCE:
+                assigned_students_this_frame.add(st_id)
+                st_obj = student_map[st_id]
+                st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
 
-                if st_id and st_id not in assigned_students_this_frame and score >= THRESHOLD_MEDIUM_CONFIDENCE:
-                    assigned_students_this_frame.add(st_id)
-                    st_obj = student_map[st_id]
-                    st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
+                student_evidence[st_id]["scores"].append(score)
+                student_evidence[st_id]["crops"].append(crop_url)
+                student_evidence[st_id]["sharpnesses"].append(sharpness)
 
-                    if "sharpnesses" not in student_evidence[st_id]:
-                        student_evidence[st_id]["sharpnesses"] = []
+                # Peak Sharpness Focal Selection
+                best_sharp = max(student_evidence[st_id]["sharpnesses"])
+                if sharpness >= best_sharp or student_evidence[st_id]["best_emb"] is None:
+                    student_evidence[st_id]["best_emb"] = cand["emb"]
+                    student_evidence[st_id]["peak_crop"] = crop_url
+            else:
+                st_label = "Unknown"
+                unrecognized_crops.append({"crop_url": crop_url, "score": score})
 
-                    student_evidence[st_id]["scores"].append(score)
-                    student_evidence[st_id]["crops"].append(crop_url)
-                    student_evidence[st_id]["sharpnesses"].append(sharpness)
+            frame_boxes.append({
+                "box": box,
+                "label": st_label,
+                "score": calibrated_pct
+            })
 
-                    # Multi-Focal Depth Peak Selection: Lock crop & embedding from peak-sharpness focal frame
-                    best_sharp = max(student_evidence[st_id]["sharpnesses"])
-                    if sharpness >= best_sharp or student_evidence[st_id]["best_emb"] is None:
-                        student_evidence[st_id]["best_emb"] = cand["emb"]
-                        student_evidence[st_id]["peak_crop"] = crop_url
-                else:
-                    st_label = "Unknown"
-                    unrecognized_crops.append({"crop_url": crop_url, "score": score})
-
-                frame_boxes.append({
-                    "box": box,
-                    "label": st_label,
-                    "score": calibrated_pct
-                })
-
-            frame_overlay_boxes.append({"frame_index": frame_idx, "boxes": frame_boxes})
-
-        except Exception as e:
-            print(f"[AttendanceService] Error processing frame {frame_idx}: {e}")
-            continue
+        frame_overlay_boxes.append({"frame_index": frame_idx, "boxes": frame_boxes})
 
     now = datetime.utcnow()
     session_date = now.strftime("%Y-%m-%d")

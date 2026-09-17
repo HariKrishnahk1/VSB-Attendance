@@ -170,6 +170,7 @@ class AttendanceReview(Base):
     review_status = Column(String(20), default="PENDING")  # PENDING, APPROVED_PRESENT, MARKED_ABSENT
 
     session = relationship("AttendanceSession", back_populates="reviews")
+    student = relationship("Student")
 
 
 class AuditLog(Base):

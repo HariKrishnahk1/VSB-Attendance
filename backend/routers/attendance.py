@@ -72,7 +72,7 @@ def get_session_details(
             "student_name": rv.student.name if rv.student else "",
             "captured_crop": rv.captured_face_crop,
             "registered_photo": rv.student.photo_path if rv.student else "",
-            "match_score": round(rv.match_score * 100, 1),
+            "match_score": round(rv.match_score if rv.match_score > 1.0 else rv.match_score * 100, 1),
             "review_status": rv.review_status
         })
 

@@ -41,7 +41,18 @@ async function apiCall(endpoint, options = {}) {
     }
   }
   
-  const data = await response.json();
+  let data;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    data = await response.json();
+  } else {
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Server Error (${response.status}): ${rawText || response.statusText}`);
+    }
+    data = rawText;
+  }
+
   if (!response.ok) {
     throw new Error(data.detail || 'API request failed');
   }

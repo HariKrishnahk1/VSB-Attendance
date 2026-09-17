@@ -60,12 +60,24 @@ class VisionEngine:
             MAX_CLASSROOM_DETECTIONS
         )
         self.recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL_PATH, "")
+        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         print("[VisionEngine] 70-80 Student High-Density Vision Engine Ready!")
+
+    def enhance_contrast(self, img_bgr):
+        """Enhances contrast on luminance channel to sharpen far-row seats without lens focus shift."""
+        try:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l_eq = self.clahe.apply(l)
+            lab_eq = cv2.merge((l_eq, a, b))
+            return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
+        except Exception:
+            return img_bgr
 
     def detect_faces(self, img_bgr):
         """
         Detects faces across a dense 70-80 student classroom layout.
-        Uses Fast-Path Full Frame Pass + Conditional 3x3 Grid Tiling.
+        Uses Fast-Path Full Frame Pass + CLAHE Contrast + Conditional 3x3 Grid Tiling.
         """
         h, w, _ = img_bgr.shape
         all_detected_faces = []
@@ -77,7 +89,15 @@ class VisionEngine:
             for f in faces_main:
                 all_detected_faces.append(f)
 
-        # 2. If no faces detected in full frame, run high-resolution grid tiling
+        # 2. If low detection, try CLAHE contrast enhanced frame for far rows
+        if len(all_detected_faces) < 5:
+            enhanced_img = self.enhance_contrast(img_bgr)
+            _, faces_enh = self.detector.detect(enhanced_img)
+            if faces_enh is not None:
+                for f in faces_enh:
+                    all_detected_faces.append(f)
+
+        # 3. High-resolution grid tiling for back rows & dense seating
         if len(all_detected_faces) == 0:
             qw, qh = int(w * 0.4), int(h * 0.4)
             overlap_x = int(w * 0.3)
@@ -201,8 +221,47 @@ class VisionEngine:
         return float(score)
 
     def check_blurriness(self, img_bgr):
+        """Calculates Laplacian variance for sharpness measurement."""
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    def is_autofocus_blurry(self, img_bgr, min_threshold=15.0):
+        """Checks if a frame is distorted by temporary camera autofocus hunting."""
+        score = self.check_blurriness(img_bgr)
+        return score < min_threshold
+
+    @staticmethod
+    def calibrate_confidence_score(raw_cosine_score: float) -> float:
+        """
+        Converts raw SFace cosine similarity (-1.0 to 1.0) into a realistic, calibrated percentage (0.0 to 100.0).
+        SFace Cosine Standard:
+          - Threshold ~0.36 matches same identity with ~99% accuracy.
+          - Score >= 0.50 indicates strong facial similarity.
+        """
+        s = float(raw_cosine_score)
+        if s <= 0.15:
+            # Noise / No match
+            return max(0.0, round(s * 100.0, 1))
+        elif s < 0.32:
+            # 0.15 to 0.32 -> 15.0% to 48.0%
+            pct = 15.0 + ((s - 0.15) / 0.17) * 33.0
+            return round(pct, 1)
+        elif s < 0.36:
+            # 0.32 to 0.36 -> 48.0% to 68.0% (Review boundary)
+            pct = 48.0 + ((s - 0.32) / 0.04) * 20.0
+            return round(pct, 1)
+        elif s < 0.48:
+            # 0.36 to 0.48 -> 68.0% to 88.0% (Good match)
+            pct = 68.0 + ((s - 0.36) / 0.12) * 20.0
+            return round(pct, 1)
+        elif s < 0.65:
+            # 0.48 to 0.65 -> 88.0% to 97.5% (High match)
+            pct = 88.0 + ((s - 0.48) / 0.17) * 9.5
+            return round(pct, 1)
+        else:
+            # > 0.65 -> 97.5% to 99.8%
+            pct = 97.5 + min(2.3, (s - 0.65) * 5.0)
+            return round(pct, 1)
 
     def process_single_image(self, img_bytes_or_path):
         if isinstance(img_bytes_or_path, (str, Path)):

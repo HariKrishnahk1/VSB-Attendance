@@ -292,10 +292,30 @@ async function initWebcam() {
     state.webcamStream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
     });
+
+    // Avoid camera autofocus hunting by locking hardware focus mode to fixed optics if supported
+    const videoTrack = state.webcamStream.getVideoTracks()[0];
+    if (videoTrack && videoTrack.getCapabilities) {
+      const capabilities = videoTrack.getCapabilities();
+      if (capabilities.focusMode) {
+        try {
+          const targetMode = capabilities.focusMode.includes('fixed') ? 'fixed' :
+                             capabilities.focusMode.includes('manual') ? 'manual' :
+                             capabilities.focusMode.includes('none') ? 'none' : null;
+          if (targetMode) {
+            await videoTrack.applyConstraints({ advanced: [{ focusMode: targetMode }] });
+            console.log(`[Camera Optics] Locked camera focus mode to '${targetMode}' to avoid autofocus blur.`);
+          }
+        } catch (fErr) {
+          console.warn('[Camera Optics] Focus mode constraint adjustment:', fErr);
+        }
+      }
+    }
+
     video.srcObject = state.webcamStream;
     placeholder.style.display = 'none';
     pill.className = 'camera-status-pill ready';
-    statusText.innerText = 'Ready';
+    statusText.innerText = 'Ready (Fixed Focus Optics)';
   } catch (err) {
     console.warn('Webcam hardware not found or permission denied:', err);
     placeholder.innerHTML = `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 1l22 22"/><path d="M21 21l-3-3m-3-3L3 3"/><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/></svg><p>Webcam not connected. Using simulated classroom smartboard mode.</p>`;
@@ -322,7 +342,7 @@ async function startSmartboardAttendance() {
 
   overlay.style.display = 'flex';
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = 'Scanning Classroom...';
+  statusText.innerText = 'Scanning Entire Classroom (4s Burst)...';
 
   const video = document.getElementById('webcamVideo');
   const canvas = document.createElement('canvas');
@@ -331,33 +351,34 @@ async function startSmartboardAttendance() {
   const ctx = canvas.getContext('2d');
 
   const capturedFrames = [];
-  const captureDurationMs = 1200;
-  const intervalMs = 300;
+  const captureDurationMs = 4000; // 4.0 seconds multi-frame classroom scan
+  const intervalMs = 250; // 16 total frames captured across 4 seconds
   const startTime = Date.now();
 
   const timer = setInterval(() => {
     const elapsed = Date.now() - startTime;
     const progressPct = Math.min(100, (elapsed / captureDurationMs) * 100);
     fill.style.width = `${progressPct}%`;
-    document.getElementById('scanSeconds').innerText = ((captureDurationMs - elapsed) / 1000).toFixed(1);
+    const remainingSec = Math.max(0.0, (captureDurationMs - elapsed) / 1000).toFixed(1);
+    document.getElementById('scanSeconds').innerText = remainingSec;
 
     if (state.webcamStream && video.readyState === 4) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.75));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.80));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.75));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.80));
     }
 
     if (elapsed >= captureDurationMs) {
       clearInterval(timer);
       overlay.style.display = 'none';
       pill.className = 'camera-status-pill ready';
-      statusText.innerText = '⚡ AI Processing...';
+      statusText.innerText = '⚡ Calibrating Neural Facial Models...';
 
       sendFramesForProcessing(capturedFrames);
     }

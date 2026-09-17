@@ -11,7 +11,7 @@ from backend.config import (
 )
 from backend.models import (
     Student, StudentFaceEmbedding, AttendanceSession,
-    AttendanceRecord, AttendanceReview, SessionStatus, AttendanceStatus
+    AttendanceRecord, AttendanceReview, SessionStatus, AttendanceStatus, Subject
 )
 from backend.services.vision_service import get_vision_engine
 
@@ -24,6 +24,14 @@ def process_smartboard_session(
     db_session: Session = None
 ) -> dict:
     vision = get_vision_engine()
+
+    if not subject_id and db_session:
+        subj = db_session.query(Subject).filter(Subject.class_id == class_id).first()
+        if not subj:
+            subj = Subject(name="General AI Lecture", code="AI301", class_id=class_id)
+            db_session.add(subj)
+            db_session.flush()
+        subject_id = subj.id
 
     students = db_session.query(Student).filter(
         Student.class_id == class_id,
@@ -70,6 +78,12 @@ def process_smartboard_session(
             img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
             if img_bgr is None:
+                continue
+
+            # Autofocus Hunting & Motion Blur Filtering
+            if vision.is_autofocus_blurry(img_bgr, min_threshold=12.0) and total_frames > 3:
+                # Skip frames severely distorted by lens focus hunting
+                print(f"[AttendanceService] Skipping frame {frame_idx} due to camera focus blur.")
                 continue
 
             faces = vision.detect_faces(img_bgr)
@@ -133,10 +147,12 @@ def process_smartboard_session(
                 crop_url = cand["crop_url"]
                 box = cand["face_box"]
 
+                calibrated_pct = vision.calibrate_confidence_score(score)
+
                 if st_id and st_id not in assigned_students_this_frame and score >= THRESHOLD_MEDIUM_CONFIDENCE:
                     assigned_students_this_frame.add(st_id)
                     st_obj = student_map[st_id]
-                    st_label = f"{st_obj.student_id} ({int(score * 100)}%)"
+                    st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
 
                     student_evidence[st_id]["scores"].append(score)
                     student_evidence[st_id]["crops"].append(crop_url)
@@ -149,7 +165,7 @@ def process_smartboard_session(
                 frame_boxes.append({
                     "box": box,
                     "label": st_label,
-                    "score": round(max(0.0, score) * 100, 1)
+                    "score": calibrated_pct
                 })
 
             frame_overlay_boxes.append({"frame_index": frame_idx, "boxes": frame_boxes})
@@ -186,6 +202,7 @@ def process_smartboard_session(
 
         frame_hits = len(scores)
         max_score = max(scores) if scores else 0.0
+        calibrated_pct = vision.calibrate_confidence_score(max_score) if scores else 0.0
 
         status = AttendanceStatus.ABSENT.value
 
@@ -193,7 +210,7 @@ def process_smartboard_session(
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
             # Online Embedding Auto-Enrichment (Continuous Model Enhancement)
-            if ev.get("best_emb") is not None and max_score >= 0.80:
+            if ev.get("best_emb") is not None and max_score >= 0.50:
                 try:
                     curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
                         StudentFaceEmbedding.student_id == student.id
@@ -214,7 +231,7 @@ def process_smartboard_session(
                 session_id=att_session.id,
                 student_id=student.id,
                 captured_face_crop=crops[0] if crops else student.photo_path,
-                match_score=max_score,
+                match_score=calibrated_pct,
                 review_status="PENDING"
             )
             db_session.add(review_entry)
@@ -226,7 +243,7 @@ def process_smartboard_session(
             session_id=att_session.id,
             student_id=student.id,
             status=status,
-            confidence=round(max_score * 100, 2),
+            confidence=round(calibrated_pct, 2),
             notes=f"Auto-recognized ({frame_hits} frames)" if status == AttendanceStatus.PRESENT.value else None
         )
         db_session.add(record)
@@ -234,7 +251,7 @@ def process_smartboard_session(
             "student_id": student.student_id,
             "student_name": student.name,
             "status": status,
-            "confidence": f"{round(max_score * 100, 1)}%",
+            "confidence": f"{round(calibrated_pct, 1)}%",
             "registered_photo": student.photo_path,
             "captured_crop": crops[0] if crops else None
         })

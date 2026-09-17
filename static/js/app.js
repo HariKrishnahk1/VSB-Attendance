@@ -353,7 +353,7 @@ async function startSmartboardAttendance() {
 
   overlay.style.display = 'flex';
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = 'Scanning Entire Classroom (4s Burst)...';
+  statusText.innerText = 'Hardware Autofocus Focal Sweep (6.0s)...';
 
   const video = document.getElementById('webcamVideo');
   const canvas = document.createElement('canvas');
@@ -362,8 +362,8 @@ async function startSmartboardAttendance() {
   const ctx = canvas.getContext('2d');
 
   const capturedFrames = [];
-  const captureDurationMs = 4000; // 4.0 seconds multi-frame classroom scan
-  const intervalMs = 250; // 16 total frames captured across 4 seconds
+  const captureDurationMs = 6000; // 6.0 seconds multi-depth focal sweep scan
+  const intervalMs = 250; // 24 total frames captured across 6.0s autofocus sweep
   const startTime = Date.now();
 
   const timer = setInterval(() => {

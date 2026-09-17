@@ -225,6 +225,20 @@ class VisionEngine:
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    def calculate_crop_sharpness(self, img_bgr, face_box):
+        """Calculates local Laplacian sharpness for a specific student's face crop during camera focal sweep."""
+        try:
+            x, y, w, h = [int(v) for v in face_box[:4]]
+            img_h, img_w, _ = img_bgr.shape
+            x, y = max(0, x), max(0, y)
+            crop = img_bgr[y:min(y+h, img_h), x:min(x+w, img_w)]
+            if crop.size > 0:
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            pass
+        return 0.0
+
     def is_autofocus_blurry(self, img_bgr, min_threshold=15.0):
         """Checks if a frame is distorted by temporary camera autofocus hunting."""
         score = self.check_blurriness(img_bgr)

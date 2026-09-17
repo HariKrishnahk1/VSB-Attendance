@@ -53,9 +53,9 @@ def test_smartboard_session(tokens):
     classes = client.get("/api/admin/classes").json()
     class_id = classes[0]["id"]
 
-    # Generate 16 sample frames (representing 4-second scan burst at 250ms interval)
+    # Generate 24 sample frames (representing 6-second hardware autofocus sweep burst at 250ms interval)
     dummy_b64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-    frames = [dummy_b64] * 16
+    frames = [dummy_b64] * 24
 
     res = client.post(
         "/api/attendance/process-frames",
@@ -64,7 +64,7 @@ def test_smartboard_session(tokens):
     )
     assert res.status_code == 200, f"Process frames failed: {res.text}"
     session_data = res.json()
-    print(f"[OK] Smartboard Session created (4s / 16-frame burst): ID #{session_data['session_id']}")
+    print(f"[OK] Smartboard Session created (6s / 24-frame focal sweep): ID #{session_data['session_id']}")
     print(f"  Total Roster: {session_data['total_students']}, Present: {session_data['present_count']}, Pending: {session_data['pending_count']}, Absent: {session_data['absent_count']}")
     return session_data["session_id"]
 

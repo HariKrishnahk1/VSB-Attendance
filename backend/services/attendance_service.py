@@ -100,6 +100,7 @@ def process_smartboard_session(
 
                 h_img, w_img, _ = img_bgr.shape
                 crop = img_bgr[y:min(y+h, h_img), x:min(x+w, w_img)]
+                local_sharpness = vision.calculate_crop_sharpness(img_bgr, [x, y, w, h])
 
                 best_student_id = None
                 best_score = -1.0
@@ -130,6 +131,7 @@ def process_smartboard_session(
                     "face_box": [int(x), int(y), int(w), int(h)],
                     "best_student_id": best_student_id,
                     "score": best_score,
+                    "sharpness": local_sharpness,
                     "crop_url": crop_url,
                     "emb": emb
                 })
@@ -146,6 +148,7 @@ def process_smartboard_session(
                 score = cand["score"]
                 crop_url = cand["crop_url"]
                 box = cand["face_box"]
+                sharpness = cand.get("sharpness", 0.0)
 
                 calibrated_pct = vision.calibrate_confidence_score(score)
 
@@ -154,10 +157,18 @@ def process_smartboard_session(
                     st_obj = student_map[st_id]
                     st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
 
+                    if "sharpnesses" not in student_evidence[st_id]:
+                        student_evidence[st_id]["sharpnesses"] = []
+
                     student_evidence[st_id]["scores"].append(score)
                     student_evidence[st_id]["crops"].append(crop_url)
-                    if student_evidence[st_id]["best_emb"] is None or score > max(student_evidence[st_id]["scores"]):
+                    student_evidence[st_id]["sharpnesses"].append(sharpness)
+
+                    # Multi-Focal Depth Peak Selection: Lock crop & embedding from peak-sharpness focal frame
+                    best_sharp = max(student_evidence[st_id]["sharpnesses"])
+                    if sharpness >= best_sharp or student_evidence[st_id]["best_emb"] is None:
                         student_evidence[st_id]["best_emb"] = cand["emb"]
+                        student_evidence[st_id]["peak_crop"] = crop_url
                 else:
                     st_label = "Unknown"
                     unrecognized_crops.append({"crop_url": crop_url, "score": score})
@@ -230,7 +241,7 @@ def process_smartboard_session(
             review_entry = AttendanceReview(
                 session_id=att_session.id,
                 student_id=student.id,
-                captured_face_crop=crops[0] if crops else student.photo_path,
+                captured_face_crop=ev.get("peak_crop") or (crops[0] if crops else student.photo_path),
                 match_score=calibrated_pct,
                 review_status="PENDING"
             )
@@ -253,7 +264,7 @@ def process_smartboard_session(
             "status": status,
             "confidence": f"{round(calibrated_pct, 1)}%",
             "registered_photo": student.photo_path,
-            "captured_crop": crops[0] if crops else None
+            "captured_crop": ev.get("peak_crop") or (crops[0] if crops else None)
         })
 
     att_session.present_count = present_cnt

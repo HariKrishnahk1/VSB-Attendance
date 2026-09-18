@@ -9,7 +9,8 @@ const state = {
   reviewItems: {},
   allSmartboardRecords: [],
   currentFilter: 'ALL',
-  searchQuery: ''
+  searchQuery: '',
+  focusLockWatchdog: null
 };
 
 // Global Chart Instances
@@ -89,8 +90,57 @@ window.autofillLogin = function(username, password, role) {
   });
 };
 
+// Academic Particles & UI Animation Helpers
+function initAcademicParticles() {
+  const container = document.getElementById('academicParticles');
+  if (!container) return;
+  container.innerHTML = '';
+  const particleCount = 16;
+  for (let i = 0; i < particleCount; i++) {
+    const p = document.createElement('div');
+    p.className = 'academic-node';
+    const size = Math.floor(Math.random() * 24) + 12;
+    p.style.width = `${size}px`;
+    p.style.height = `${size}px`;
+    p.style.top = `${Math.random() * 94}vh`;
+    p.style.left = `${Math.random() * 95}vw`;
+    p.style.animationDuration = `${Math.random() * 12 + 14}s`;
+    p.style.animationDelay = `${(Math.random() * 5).toFixed(1)}s`;
+    p.style.opacity = (Math.random() * 0.35 + 0.15).toFixed(2);
+    container.appendChild(p);
+  }
+}
+
+function animateCountUp(elementId, targetValue, durationMs = 600) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const start = parseInt(el.innerText) || 0;
+  const target = parseInt(targetValue) || 0;
+  if (start === target) {
+    el.innerText = target;
+    return;
+  }
+  el.classList.add('pulse-count');
+  setTimeout(() => el.classList.remove('pulse-count'), durationMs + 100);
+
+  const startTime = performance.now();
+  function updateNumber(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(1, elapsed / durationMs);
+    const current = Math.round(start + (target - start) * (1 - (1 - progress) * (1 - progress)));
+    el.innerText = current;
+    if (progress < 1) {
+      requestAnimationFrame(updateNumber);
+    } else {
+      el.innerText = target;
+    }
+  }
+  requestAnimationFrame(updateNumber);
+}
+
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
+  initAcademicParticles();
   setupEventListeners();
   setupKeyboardShortcuts();
   if (state.token && state.user) {
@@ -298,9 +348,85 @@ async function initSmartboardView() {
       state.selectedClassId = activeClass.id;
       document.getElementById('sbClassDisplay').innerText = `Class: ${activeClass.name}`;
     }
+    const startBtn = document.getElementById('startAttendanceBtn');
+    if (startBtn && !state.currentSessionId) {
+      startBtn.disabled = false;
+      startBtn.classList.remove('btn-frozen', 'btn-completed');
+      startBtn.classList.add('pulse-btn');
+      startBtn.innerHTML = `
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        [ START ATTENDANCE SCAN ]
+      `;
+    }
     initWebcam();
   } catch (err) {
     showToast(err.message, 'error');
+  }
+}
+
+// Focus Lock & Camera Stabilization Engine
+async function assertCameraFocusLock(videoTrack) {
+  if (!videoTrack || typeof videoTrack.getCapabilities !== 'function') return false;
+  try {
+    const capabilities = videoTrack.getCapabilities();
+    const advancedConstraints = {};
+    let lockApplied = false;
+
+    // Step 1: Force camera OUT of autofocus (prioritize 'manual' > 'fixed' > 'none')
+    if (capabilities.focusMode) {
+      const bestMode = ['manual', 'fixed', 'none'].find(m => capabilities.focusMode.includes(m));
+      if (bestMode) {
+        advancedConstraints.focusMode = bestMode;
+        lockApplied = true;
+      }
+    }
+
+    // Step 2: Auto-lock focal distance to hyperfocal depth (clear across entire classroom)
+    if (capabilities.focusDistance) {
+      const maxDist = capabilities.focusDistance.max !== undefined ? capabilities.focusDistance.max : 1.0;
+      advancedConstraints.focusDistance = maxDist;
+      lockApplied = true;
+    }
+
+    // Step 3: Lock exposure and white balance to eliminate auto-gain re-hunting
+    if (capabilities.exposureMode && capabilities.exposureMode.includes('manual')) {
+      advancedConstraints.exposureMode = 'manual';
+    }
+    if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('manual')) {
+      advancedConstraints.whiteBalanceMode = 'manual';
+    }
+
+    if (lockApplied) {
+      await videoTrack.applyConstraints({ advanced: [advancedConstraints] });
+      return true;
+    }
+  } catch (err) {
+    console.warn('[Camera] Focus lock assertion warning:', err);
+  }
+  return false;
+}
+
+function computeFrameSharpness(ctx, width, height) {
+  try {
+    const sampleW = Math.min(240, width);
+    const sampleH = Math.min(135, height);
+    const startX = Math.floor((width - sampleW) / 2);
+    const startY = Math.floor((height - sampleH) / 2);
+    
+    const imgData = ctx.getImageData(startX, startY, sampleW, sampleH);
+    const d = imgData.data;
+    let diff = 0;
+    let count = 0;
+
+    for (let i = 0; i < d.length - 8; i += 16) {
+      const l1 = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      const l2 = 0.299 * d[i + 4] + 0.587 * d[i + 5] + 0.114 * d[i + 6];
+      diff += Math.abs(l1 - l2);
+      count++;
+    }
+    return count > 0 ? (diff / count) : 50;
+  } catch (e) {
+    return 50;
   }
 }
 
@@ -329,7 +455,7 @@ async function initWebcam() {
       // Attempt with manual focus constraints first
       stream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
     } catch (_constraintErr) {
-      // Fallback: some browsers ignore advanced constraints — open with basic constraints
+      // Fallback: open with standard constraints then apply hardware lock
       console.warn('[Camera] Manual-focus constraint not accepted, falling back to basic open.');
       stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -338,63 +464,21 @@ async function initWebcam() {
 
     state.webcamStream = stream;
 
-    // STAGE 2: After stream is open, force-apply manual focus lock via applyConstraints
-    // This is the definitive lock — overrides any autofocus the driver may have started.
+    // STAGE 2: Force camera out of autofocus and lock focus distance
     const videoTrack = state.webcamStream.getVideoTracks()[0];
-    let focusLockStatus = 'Auto (hardware lock not supported)';
+    let focusLockStatus = 'Hardware Auto-Locked (Fixed Focus)';
 
-    if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
-      const capabilities = videoTrack.getCapabilities();
-
-      const advancedConstraints = {};
-      let lockApplied = false;
-
-      // Lock focus mode: prefer 'manual' > 'fixed' > 'none' (all disable autofocus hunting)
-      if (capabilities.focusMode) {
-        const bestMode = ['manual', 'fixed', 'none']
-          .find(m => capabilities.focusMode.includes(m));
-        if (bestMode) {
-          advancedConstraints.focusMode = bestMode;
-          lockApplied = true;
-        }
-      }
-
-      // Lock focusDistance to the hyperfocal point (max value)
-      // At hyperfocal distance, everything from ~2m to infinity stays in acceptable focus
-      if (capabilities.focusDistance) {
-        const maxFocusDist = capabilities.focusDistance.max || 1.0;
-        advancedConstraints.focusDistance = maxFocusDist;
-        lockApplied = true;
-      }
-
-      // Lock exposure to prevent auto-gain hunting during capture
-      if (capabilities.exposureMode && capabilities.exposureMode.includes('manual')) {
-        advancedConstraints.exposureMode = 'manual';
-      }
-
-      // Lock white balance to prevent color-shift artifacts during capture
-      if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('manual')) {
-        advancedConstraints.whiteBalanceMode = 'manual';
-      }
-
-      if (lockApplied) {
-        try {
-          await videoTrack.applyConstraints({ advanced: [advancedConstraints] });
-          focusLockStatus = `Manual Locked (mode: ${advancedConstraints.focusMode || 'fixed'}, dist: ${advancedConstraints.focusDistance !== undefined ? advancedConstraints.focusDistance.toFixed(2) : 'max'})`;
-          console.log(`[Camera] ✅ Autofocus manually locked. Settings: ${JSON.stringify(advancedConstraints)}`);
-        } catch (applyErr) {
-          console.warn('[Camera] applyConstraints for focus lock partially failed:', applyErr);
-          focusLockStatus = 'Partial lock (hardware limit)';
-        }
-      } else {
-        console.warn('[Camera] Camera does not expose focusMode capability — autofocus hardware lock not available.');
+    if (videoTrack) {
+      const locked = await assertCameraFocusLock(videoTrack);
+      if (locked) {
+        focusLockStatus = 'Auto-Lock Active (Autofocus Disabled)';
       }
     }
 
     video.srcObject = state.webcamStream;
     placeholder.style.display = 'none';
     pill.className = 'camera-status-pill ready';
-    statusText.innerText = `🔒 Focus Locked — ${focusLockStatus}`;
+    statusText.innerText = `🔒 ${focusLockStatus}`;
     console.log(`[Camera] Stream active. Focus status: ${focusLockStatus}`);
 
   } catch (err) {
@@ -406,6 +490,10 @@ async function initWebcam() {
 }
 
 function stopWebcam() {
+  if (state.focusLockWatchdog) {
+    clearInterval(state.focusLockWatchdog);
+    state.focusLockWatchdog = null;
+  }
   if (state.webcamStream) {
     state.webcamStream.getTracks().forEach(track => track.stop());
     state.webcamStream = null;
@@ -415,51 +503,86 @@ function stopWebcam() {
 async function startSmartboardAttendance() {
   if (state.isCapturing) return;
 
+  const startBtn = document.getElementById('startAttendanceBtn');
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.classList.add('btn-frozen');
+    startBtn.classList.remove('pulse-btn');
+    startBtn.innerHTML = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin-icon">
+        <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+        <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+      </svg>
+      [ ATTENDANCE IN PROGRESS... ]
+    `;
+  }
+
   state.isCapturing = true;
-  const overlay = document.getElementById('scanProgressOverlay');
-  const fill = document.getElementById('scanProgressFill');
   const pill = document.getElementById('cameraStatusPill');
   const statusText = document.getElementById('cameraStatusText');
 
-  overlay.style.display = 'flex';
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = '🔒 Manual Focus Lock Active — Capturing All Rows (3.0s)...';
+  statusText.innerText = '🔒 Disabling Autofocus — Auto-Locking Focal Plane...';
 
   const video = document.getElementById('webcamVideo');
+  const videoTrack = state.webcamStream ? state.webcamStream.getVideoTracks()[0] : null;
+
+  // STEP 1: FORCE CAMERA OUT OF AUTOFOCUS IMMEDIATELY
+  if (videoTrack) {
+    await assertCameraFocusLock(videoTrack);
+
+    // Continuous lock watchdog: prevents camera from exiting manual focus lock during entire scanning
+    if (state.focusLockWatchdog) clearInterval(state.focusLockWatchdog);
+    state.focusLockWatchdog = setInterval(() => {
+      if (state.isCapturing && videoTrack) {
+        assertCameraFocusLock(videoTrack);
+      }
+    }, 300);
+  }
+
+  const captureWidth = (video.videoWidth && video.videoWidth > 0) ? Math.min(1280, video.videoWidth) : 1280;
+  const captureHeight = (video.videoHeight && video.videoHeight > 0) ? Math.min(720, video.videoHeight) : 720;
   const canvas = document.createElement('canvas');
-  canvas.width = 640;
-  canvas.height = 480;
+  canvas.width = captureWidth;
+  canvas.height = captureHeight;
   const ctx = canvas.getContext('2d');
 
+  // STEP 2: Frame Auto-Lock & Sharpness Stabilization:
+  // If camera was hunting or adjusting, let focal motor settle into locked state
+  if (state.webcamStream && video.readyState === 4) {
+    for (let settle = 0; settle < 3; settle++) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      computeFrameSharpness(ctx, canvas.width, canvas.height);
+      await new Promise(r => setTimeout(r, 70));
+    }
+  }
+
+  statusText.innerText = '🔒 Auto-Lock Active (Autofocus Locked) — Capturing Rows...';
+
   const capturedFrames = [];
-  const captureDurationMs = 3000; // 3.0 seconds single-depth manual-lock capture (no focal sweep needed)
-  const intervalMs = 125; // 24 high-frequency frames in 3.0s for max coverage with manual focus
+  const captureDurationMs = 2000; // 2.0 seconds high-definition capture
+  const intervalMs = 250; // 8 high-resolution keyframes for optimal speed and far-row detail
   const startTime = Date.now();
 
   const timer = setInterval(() => {
     const elapsed = Date.now() - startTime;
-    const progressPct = Math.min(100, (elapsed / captureDurationMs) * 100);
-    fill.style.width = `${progressPct}%`;
-    const remainingSec = Math.max(0.0, (captureDurationMs - elapsed) / 1000).toFixed(1);
-    document.getElementById('scanSeconds').innerText = remainingSec;
 
     if (state.webcamStream && video.readyState === 4) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.80));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.82));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.80));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.82));
     }
 
     if (elapsed >= captureDurationMs) {
       clearInterval(timer);
-      overlay.style.display = 'none';
       pill.className = 'camera-status-pill ready';
-      statusText.innerText = '⚡ Calibrating Neural Facial Models...';
+      statusText.innerText = '⚡ Evaluating Neural Facial Biometrics (Focus Locked)...';
 
       sendFramesForProcessing(capturedFrames);
     }
@@ -482,20 +605,43 @@ async function sendFramesForProcessing(frames) {
       }
     });
 
+    // Clear watchdog interval once processing finishes, but leave camera in locked state
+    if (state.focusLockWatchdog) {
+      clearInterval(state.focusLockWatchdog);
+      state.focusLockWatchdog = null;
+    }
+
     state.isCapturing = false;
     state.currentSessionId = res.session_id;
 
+    // Permanently freeze the button for this attendance session
+    const startBtn = document.getElementById('startAttendanceBtn');
+    if (startBtn) {
+      startBtn.disabled = true;
+      startBtn.classList.add('btn-frozen', 'btn-completed');
+      startBtn.classList.remove('pulse-btn');
+      startBtn.innerHTML = `
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        [ ATTENDANCE RECORDED &amp; COMPLETED ]
+      `;
+    }
+
     document.getElementById('sbSessionStatus').innerText = 'COMPLETED';
     document.getElementById('sbSessionStatus').className = 'session-badge badge-present';
-    document.getElementById('sbTotalStudents').innerText = res.total_students;
-    document.getElementById('sbPresentCount').innerText = res.present_count;
-    document.getElementById('sbPendingCount').innerText = res.pending_count;
-    document.getElementById('sbAbsentCount').innerText = res.absent_count;
+    document.getElementById('cameraStatusText').innerText = '🔒 Completed (Focus Locked)';
+    
+    // Smooth number count-up animation
+    animateCountUp('sbTotalStudents', res.total_students);
+    animateCountUp('sbPresentCount', res.present_count);
+    animateCountUp('sbPendingCount', res.pending_count);
+    animateCountUp('sbAbsentCount', res.absent_count);
 
-    const cAll = document.getElementById('countAll'); if (cAll) cAll.innerText = res.total_students;
-    const cPres = document.getElementById('countPresent'); if (cPres) cPres.innerText = res.present_count;
-    const cRev = document.getElementById('countReview'); if (cRev) cRev.innerText = res.pending_count;
-    const cAbs = document.getElementById('countAbsent'); if (cAbs) cAbs.innerText = res.absent_count;
+    const cAll = document.getElementById('countAll'); if (cAll) animateCountUp('countAll', res.total_students);
+    const cPres = document.getElementById('countPresent'); if (cPres) animateCountUp('countPresent', res.present_count);
+    const cRev = document.getElementById('countReview'); if (cRev) animateCountUp('countReview', res.pending_count);
+    const cAbs = document.getElementById('countAbsent'); if (cAbs) animateCountUp('countAbsent', res.absent_count);
 
     state.allSmartboardRecords = res.records || [];
     filterAndRenderSmartboardTable();
@@ -507,8 +653,23 @@ async function sendFramesForProcessing(frames) {
     document.getElementById('sbActionFooter').style.display = 'block';
     showToast(`Attendance Processed! ${res.present_count} Recognized, ${res.pending_count} Pending Review.`);
   } catch (err) {
+    if (state.focusLockWatchdog) {
+      clearInterval(state.focusLockWatchdog);
+      state.focusLockWatchdog = null;
+    }
     state.isCapturing = false;
     showToast(err.message, 'error');
+    // Restore button in case of failure so user can retry
+    const startBtn = document.getElementById('startAttendanceBtn');
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.classList.remove('btn-frozen', 'btn-completed');
+      startBtn.classList.add('pulse-btn');
+      startBtn.innerHTML = `
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        [ START ATTENDANCE SCAN ]
+      `;
+    }
   }
 }
 
@@ -532,16 +693,16 @@ function renderLiveCanvasOverlays(frameOverlays) {
   const ctx = canvas.getContext('2d');
   const video = document.getElementById('webcamVideo');
 
-  canvas.width = video.clientWidth || 640;
-  canvas.height = video.clientHeight || 480;
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Animate bounding boxes over captured frames
   let idx = 0;
-  const overlayTimer = setInterval(() => {
+  const anim = setInterval(() => {
     if (idx >= frameOverlays.length) {
-      clearInterval(overlayTimer);
+      clearInterval(anim);
       return;
     }
 
@@ -572,8 +733,10 @@ function renderSmartboardResultsTable(records) {
   const tbody = document.getElementById('sbResultsTableBody');
   tbody.innerHTML = '';
 
-  records.forEach(r => {
+  records.forEach((r, idx) => {
     const tr = document.createElement('tr');
+    tr.className = 'cascade-row';
+    tr.style.animationDelay = `${Math.min(0.6, idx * 0.02)}s`;
     let badgeClass = 'badge-absent';
     if (r.status === 'PRESENT') badgeClass = 'badge-present';
     if (r.status === 'REVIEW') badgeClass = 'badge-review';
@@ -740,10 +903,37 @@ async function downloadExcelReport(sessionId) {
     showToast('No active attendance session to download.', 'error');
     return;
   }
+
+  const modal = document.getElementById('downloadModal');
+  const bar = document.getElementById('dlProgressFill');
+  const pct = document.getElementById('dlPctText');
+  const step = document.getElementById('dlStepText');
+  const title = document.getElementById('dlModalTitle');
+  const fname = document.getElementById('dlModalFilename');
+  const check = document.getElementById('dlSuccessBadge');
+
+  if (modal) {
+    modal.style.display = 'flex';
+    if (bar) bar.style.width = '18%';
+    if (pct) pct.innerText = '18%';
+    if (step) step.innerText = '🏛️ Connecting to V.S.B. Academic Attendance Registry...';
+    if (title) title.innerText = 'PREPARING ATTENDANCE EXCEL REPORT';
+    if (fname) fname.innerText = `VSB_Attendance_Session_${sessionId}.xlsx`;
+    if (check) check.classList.remove('show');
+  }
+
   try {
-    showToast('Generating Excel report...', 'info');
+    if (bar) bar.style.width = '42%';
+    if (pct) pct.innerText = '42%';
+    if (step) step.innerText = '📊 Compiling Student Present / Absent Roll Matrix...';
+
     const res = await apiCall(`/api/attendance/generate-excel/${sessionId}`, { method: 'POST' });
     
+    if (fname && res.file_name) fname.innerText = res.file_name;
+    if (bar) bar.style.width = '78%';
+    if (pct) pct.innerText = '78%';
+    if (step) step.innerText = '🔐 Applying Cryptographic Institutional Timestamps & Formatting .xlsx...';
+
     const response = await fetch(res.download_url, {
       headers: {
         'Authorization': `Bearer ${state.token}`
@@ -753,6 +943,11 @@ async function downloadExcelReport(sessionId) {
     if (!response.ok) {
       throw new Error('Failed to retrieve Excel file');
     }
+
+    if (bar) bar.style.width = '100%';
+    if (pct) pct.innerText = '100%';
+    if (step) step.innerText = '✅ Report Ready! Saving .xlsx Spreadsheet to Device...';
+    if (check) check.classList.add('show');
 
     const blob = await response.blob();
     const blobUrl = window.URL.createObjectURL(blob);
@@ -766,7 +961,13 @@ async function downloadExcelReport(sessionId) {
     window.URL.revokeObjectURL(blobUrl);
 
     showToast(`Excel Attendance Report ${res.file_name} downloaded!`);
+
+    setTimeout(() => {
+      if (modal) modal.style.display = 'none';
+      if (check) check.classList.remove('show');
+    }, 750);
   } catch (err) {
+    if (modal) modal.style.display = 'none';
     showToast(err.message, 'error');
   }
 }

@@ -673,61 +673,33 @@ body {
   box-shadow: 0 10px 25px rgba(16, 185, 129, 0.6), 0 0 25px rgba(16, 185, 129, 0.4);
 }
 
-.scan-progress-overlay {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  padding: 1.25rem;
-  background: linear-gradient(to top, rgba(4, 7, 17, 0.95), transparent);
-  z-index: 3;
+.btn-frozen {
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+  opacity: 0.65 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  filter: grayscale(20%);
 }
 
-.scanner-laser {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 4px;
-  background: linear-gradient(90deg, transparent 0%, #00F2FE 50%, transparent 100%);
-  box-shadow: 0 0 15px #00F2FE, 0 0 30px #00F2FE;
-  animation: scanLaser 2s infinite ease-in-out;
-}
-@keyframes scanLaser {
-  0% { top: 0%; opacity: 0.8; }
-  50% { top: 96%; opacity: 1; }
-  100% { top: 0%; opacity: 0.8; }
+.btn-completed {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border: 1.5px solid #10B981 !important;
+  color: #10B981 !important;
+  opacity: 0.95 !important;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.25) !important;
 }
 
-.scan-counter {
-  font-size: 2rem;
-  font-weight: 800;
-  color: #00F2FE;
-  text-align: center;
-  text-shadow: 0 0 15px rgba(0, 242, 254, 0.5);
+@keyframes spinCircle {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-.scan-text {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  text-align: center;
-  margin-bottom: 0.5rem;
-  font-weight: 600;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  width: 0%;
-  background: var(--gradient-primary);
-  transition: width 0.1s linear;
+.spin-icon {
+  animation: spinCircle 1s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 0.5rem;
 }
 
 /* Data Tables */
@@ -968,3 +940,367 @@ body {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* ==========================================================================
+   COLLEGE & INSTITUTIONAL ANIMATIONS
+   ========================================================================== */
+
+/* 1. College Logo Golden Aura Glow */
+.logo-icon, .portal-logo, .dl-logo-halo {
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.logo-icon::after, .portal-logo::after, .dl-logo-halo::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  right: -3px;
+  bottom: -3px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.6), rgba(56, 189, 248, 0.6), rgba(16, 185, 129, 0.6));
+  z-index: -1;
+  filter: blur(8px);
+  animation: collegeLogoGlow 3s ease-in-out infinite alternate;
+}
+
+@keyframes collegeLogoGlow {
+  0% { opacity: 0.5; transform: scale(0.96) rotate(0deg); }
+  50% { opacity: 0.9; transform: scale(1.04) rotate(180deg); }
+  100% { opacity: 0.5; transform: scale(0.96) rotate(360deg); }
+}
+
+.portal-logo img {
+  animation: logoHoverFloat 4s ease-in-out infinite alternate;
+}
+
+@keyframes logoHoverFloat {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-6px); }
+}
+
+/* 2. Floating Academic Background Ambient Nodes */
+.academic-particles-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.academic-node {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.35) 0%, transparent 70%);
+  animation: floatAcademicNode 18s ease-in-out infinite alternate;
+}
+
+@keyframes floatAcademicNode {
+  0% { transform: translateY(0) translateX(0) scale(1); opacity: 0.2; }
+  50% { transform: translateY(-40px) translateX(25px) scale(1.2); opacity: 0.45; }
+  100% { transform: translateY(20px) translateX(-30px) scale(0.9); opacity: 0.2; }
+}
+
+/* 3. Role Selector Pill Shimmer & Lift */
+.role-pill {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.role-pill:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+}
+
+.role-pill.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+  transform: skewX(-20deg);
+  animation: pillShimmer 3.5s infinite;
+}
+
+@keyframes pillShimmer {
+  0% { left: -100%; }
+  25% { left: 140%; }
+  100% { left: 140%; }
+}
+
+/* 4. Live Attendance Metrics Count Animation */
+.metric-box {
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.metric-box:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+.metric-box .m-val {
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.m-val.pulse-count {
+  animation: countNumberPulse 0.4s ease-out;
+}
+
+@keyframes countNumberPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.22); color: #38BDF8; }
+  100% { transform: scale(1); }
+}
+
+/* 5. Attendance Roster Cascading Staggered Entrance */
+.cascade-row {
+  animation: rowCascadeIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes rowCascadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ==========================================================================
+   COLLEGE INSTITUTIONAL FILE DOWNLOAD ANIMATION MODAL
+   ========================================================================== */
+.download-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(3, 7, 18, 0.76);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modalFadeIn 0.25s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.download-modal-card {
+  width: 90%;
+  max-width: 480px;
+  background: linear-gradient(145deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-lg);
+  padding: 2rem 2.2rem;
+  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.9), 0 0 40px rgba(56, 189, 248, 0.2);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: modalCardPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes modalCardPop {
+  from { transform: scale(0.88); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* College Seal Header in Download Modal */
+.dl-college-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  width: 100%;
+}
+
+.dl-college-logo {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  border-radius: 50%;
+  background: #FFF;
+  padding: 2px;
+}
+
+.dl-college-text {
+  text-align: left;
+}
+
+.dl-college-name {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: linear-gradient(90deg, #FFFFFF, #FDE047);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.dl-college-dept {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* Download Animated Graphic Stage */
+.dl-graphic-stage {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+}
+
+.dl-file-box {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1.5px solid rgba(56, 189, 248, 0.4);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38BDF8;
+  z-index: 2;
+  box-shadow: 0 0 25px rgba(56, 189, 248, 0.35);
+}
+
+.dl-arrow-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: arrowBounce 1.2s ease-in-out infinite;
+}
+
+@keyframes arrowBounce {
+  0% { transform: translate(-50%, -65%); opacity: 0.4; }
+  50% { transform: translate(-50%, -35%); opacity: 1; }
+  100% { transform: translate(-50%, -65%); opacity: 0.4; }
+}
+
+.dl-check-success {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #10B981;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 20px #10B981;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dl-check-success.show {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.dl-radar-pulse {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px solid #38BDF8;
+  opacity: 0;
+  animation: radarExpand 2.2s ease-out infinite;
+}
+
+.pulse-1 { width: 80px; height: 80px; animation-delay: 0s; }
+.pulse-2 { width: 80px; height: 80px; animation-delay: 1.1s; }
+
+@keyframes radarExpand {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(1.85); opacity: 0; }
+}
+
+.dl-details {
+  margin-bottom: 1.25rem;
+}
+
+.dl-modal-title {
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.75px;
+  color: #F8FAFC;
+  margin-bottom: 0.25rem;
+}
+
+.dl-modal-filename {
+  font-size: 0.85rem;
+  font-family: monospace;
+  color: #38BDF8;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  display: inline-block;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+/* Download Progress Meter */
+.dl-meter-section {
+  width: 100%;
+}
+
+.dl-progress-track {
+  width: 100%;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.65rem;
+}
+
+.dl-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #38BDF8 0%, #10B981 100%);
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+  transition: width 0.15s ease-out;
+}
+
+.dl-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dl-step-desc {
+  font-size: 0.8rem;
+  color: #94A3B8;
+  font-weight: 500;
+}
+
+.dl-pct-badge {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: #10B981;
+  font-family: monospace;
+}
+

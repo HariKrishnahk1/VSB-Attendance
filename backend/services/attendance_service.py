@@ -72,12 +72,11 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=8)
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=4)
     if not selected_keyframes:
         selected_keyframes = []
 
     total_frames = len(selected_keyframes)
-    min_required_hits = 1  # Keyframe focal sweep detection threshold
 
     student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None, "sharpnesses": []} for s in students}
     unrecognized_crops = []
@@ -85,7 +84,7 @@ def process_smartboard_session(
 
     def _process_frame_worker(kf_item):
         frame_idx, img_bgr, frame_sharpness = kf_item
-        if img_bgr is None:
+        if img_bgr is None or img_bgr.size == 0:
             return frame_idx, []
 
         faces = vision.detect_faces(img_bgr)
@@ -137,12 +136,10 @@ def process_smartboard_session(
             })
         return frame_idx, candidates
 
-    # Parallel Multithreaded Execution Across Focal Keyframes
-    import os
-    from concurrent.futures import ThreadPoolExecutor
-    max_workers = min(4, os.cpu_count() or 4)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        frame_results = list(executor.map(_process_frame_worker, selected_keyframes))
+    # High-performance sequential execution utilizing OpenCV's native thread pool (avoids GIL & mutex contention)
+    frame_results = []
+    for kf_item in selected_keyframes:
+        frame_results.append(_process_frame_worker(kf_item))
 
     # Sort results by frame index order
     frame_results.sort(key=lambda r: r[0])
@@ -221,11 +218,15 @@ def process_smartboard_session(
 
         status = AttendanceStatus.ABSENT.value
 
-        if max_score >= THRESHOLD_HIGH_CONFIDENCE and frame_hits >= min_required_hits:
+        # Robust Multi-Evidence Consensus Logic (optimized for multi-template & distance):
+        # 1. PRESENT: High single-frame match (>= 0.50) OR distance consensus match (>= 0.44 with >= 2 hits)
+        # 2. REVIEW: Borderline match (>= 0.36) requiring teacher 1-click review
+        # 3. ABSENT: Below 0.36
+        if (max_score >= 0.50) or (max_score >= THRESHOLD_HIGH_CONFIDENCE and frame_hits >= 2) or (max_score >= THRESHOLD_HIGH_CONFIDENCE and total_frames <= 1):
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
             # Online Embedding Auto-Enrichment (Continuous Model Enhancement)
-            if ev.get("best_emb") is not None and max_score >= 0.50:
+            if ev.get("best_emb") is not None and max_score >= 0.52:
                 try:
                     curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
                         StudentFaceEmbedding.student_id == student.id

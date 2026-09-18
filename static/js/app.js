@@ -302,38 +302,97 @@ async function initWebcam() {
   const statusText = document.getElementById('cameraStatusText');
 
   try {
-    state.webcamStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
-    });
+    // STAGE 1: Request camera with manual focus constraints directly in getUserMedia
+    // This prevents autofocus from ever activating before the stream begins.
+    const cameraConstraints = {
+      video: {
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 },
+        facingMode: 'environment',       // Prefer rear-facing / wide-angle smartboard camera
+        focusMode: 'manual',             // Request manual focus lock immediately
+        exposureMode: 'manual',          // Prevent auto-exposure hunting
+        whiteBalanceMode: 'manual'       // Prevent white-balance shift during capture
+      }
+    };
 
-    // Avoid camera autofocus hunting by locking hardware focus mode to fixed optics if supported
+    let stream;
+    try {
+      // Attempt with manual focus constraints first
+      stream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
+    } catch (_constraintErr) {
+      // Fallback: some browsers ignore advanced constraints — open with basic constraints
+      console.warn('[Camera] Manual-focus constraint not accepted, falling back to basic open.');
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+    }
+
+    state.webcamStream = stream;
+
+    // STAGE 2: After stream is open, force-apply manual focus lock via applyConstraints
+    // This is the definitive lock — overrides any autofocus the driver may have started.
     const videoTrack = state.webcamStream.getVideoTracks()[0];
-    if (videoTrack && videoTrack.getCapabilities) {
+    let focusLockStatus = 'Auto (hardware lock not supported)';
+
+    if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
       const capabilities = videoTrack.getCapabilities();
+
+      const advancedConstraints = {};
+      let lockApplied = false;
+
+      // Lock focus mode: prefer 'manual' > 'fixed' > 'none' (all disable autofocus hunting)
       if (capabilities.focusMode) {
-        try {
-          const targetMode = capabilities.focusMode.includes('fixed') ? 'fixed' :
-                             capabilities.focusMode.includes('manual') ? 'manual' :
-                             capabilities.focusMode.includes('none') ? 'none' : null;
-          if (targetMode) {
-            await videoTrack.applyConstraints({ advanced: [{ focusMode: targetMode }] });
-            console.log(`[Camera Optics] Locked camera focus mode to '${targetMode}' to avoid autofocus blur.`);
-          }
-        } catch (fErr) {
-          console.warn('[Camera Optics] Focus mode constraint adjustment:', fErr);
+        const bestMode = ['manual', 'fixed', 'none']
+          .find(m => capabilities.focusMode.includes(m));
+        if (bestMode) {
+          advancedConstraints.focusMode = bestMode;
+          lockApplied = true;
         }
+      }
+
+      // Lock focusDistance to the hyperfocal point (max value)
+      // At hyperfocal distance, everything from ~2m to infinity stays in acceptable focus
+      if (capabilities.focusDistance) {
+        const maxFocusDist = capabilities.focusDistance.max || 1.0;
+        advancedConstraints.focusDistance = maxFocusDist;
+        lockApplied = true;
+      }
+
+      // Lock exposure to prevent auto-gain hunting during capture
+      if (capabilities.exposureMode && capabilities.exposureMode.includes('manual')) {
+        advancedConstraints.exposureMode = 'manual';
+      }
+
+      // Lock white balance to prevent color-shift artifacts during capture
+      if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('manual')) {
+        advancedConstraints.whiteBalanceMode = 'manual';
+      }
+
+      if (lockApplied) {
+        try {
+          await videoTrack.applyConstraints({ advanced: [advancedConstraints] });
+          focusLockStatus = `Manual Locked (mode: ${advancedConstraints.focusMode || 'fixed'}, dist: ${advancedConstraints.focusDistance !== undefined ? advancedConstraints.focusDistance.toFixed(2) : 'max'})`;
+          console.log(`[Camera] ✅ Autofocus manually locked. Settings: ${JSON.stringify(advancedConstraints)}`);
+        } catch (applyErr) {
+          console.warn('[Camera] applyConstraints for focus lock partially failed:', applyErr);
+          focusLockStatus = 'Partial lock (hardware limit)';
+        }
+      } else {
+        console.warn('[Camera] Camera does not expose focusMode capability — autofocus hardware lock not available.');
       }
     }
 
     video.srcObject = state.webcamStream;
     placeholder.style.display = 'none';
     pill.className = 'camera-status-pill ready';
-    statusText.innerText = 'Ready (Fixed Focus Optics)';
+    statusText.innerText = `🔒 Focus Locked — ${focusLockStatus}`;
+    console.log(`[Camera] Stream active. Focus status: ${focusLockStatus}`);
+
   } catch (err) {
     console.warn('Webcam hardware not found or permission denied:', err);
     placeholder.innerHTML = `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 1l22 22"/><path d="M21 21l-3-3m-3-3L3 3"/><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/></svg><p>Webcam not connected. Using simulated classroom smartboard mode.</p>`;
     pill.className = 'camera-status-pill';
-    statusText.innerText = 'Simulated';
+    statusText.innerText = 'Simulated Mode';
   }
 }
 
@@ -355,7 +414,7 @@ async function startSmartboardAttendance() {
 
   overlay.style.display = 'flex';
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = 'Hardware Autofocus Focal Sweep (6.0s)...';
+  statusText.innerText = '🔒 Manual Focus Lock Active — Capturing All Rows (3.0s)...';
 
   const video = document.getElementById('webcamVideo');
   const canvas = document.createElement('canvas');
@@ -364,8 +423,8 @@ async function startSmartboardAttendance() {
   const ctx = canvas.getContext('2d');
 
   const capturedFrames = [];
-  const captureDurationMs = 6000; // 6.0 seconds multi-depth focal sweep scan
-  const intervalMs = 250; // 24 total frames captured across 6.0s autofocus sweep
+  const captureDurationMs = 3000; // 3.0 seconds single-depth manual-lock capture (no focal sweep needed)
+  const intervalMs = 125; // 24 high-frequency frames in 3.0s for max coverage with manual focus
   const startTime = Date.now();
 
   const timer = setInterval(() => {

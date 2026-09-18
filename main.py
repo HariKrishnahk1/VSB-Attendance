@@ -71,93 +71,149 @@ app.include_router(hod.router)
 
 
 def seed_database():
-    """Initializes tables, default accounts, and auto-ingests student ZIP dataset if present."""
-    Base.metadata.create_all(bind=engine)
+    """
+    Initializes all DB tables and seeds default department, class, and user accounts.
+    Each step is independently error-handled with rollback so a single failure
+    does not leave the DB session in a broken state.
+    """
+    print("[DB Init] Running database initialization...")
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("[DB Init] All tables created/verified OK.")
+    except Exception as e:
+        print(f"[DB Init] CRITICAL: Could not create tables: {e}")
+        raise
+
     db = SessionLocal()
     try:
-        # 1. Department
-        dept = db.query(Department).filter(Department.code == "AIDS").first()
-        if not dept:
-            dept = Department(name="Artificial Intelligence & Data Science", code="AIDS")
-            db.add(dept)
+        # Step 1: Department
+        try:
+            dept = db.query(Department).filter(Department.code == "AIDS").first()
+            if not dept:
+                dept = Department(name="Artificial Intelligence & Data Science", code="AIDS")
+                db.add(dept)
+                db.commit()
+                db.refresh(dept)
+                print("[DB Init] Department 'AIDS' created.")
+            else:
+                print(f"[DB Init] Department exists: {dept.name}")
+        except Exception as e:
+            db.rollback()
+            print(f"[DB Init] ERROR in department seed: {e}")
+            raise
+
+        # Step 2: Classroom
+        try:
+            c_aids = db.query(ClassRoom).filter(ClassRoom.name == "III AIDS A").first()
+            if not c_aids:
+                c_aids = ClassRoom(name="III AIDS A", department_id=dept.id)
+                db.add(c_aids)
+                db.commit()
+                db.refresh(c_aids)
+                print("[DB Init] ClassRoom 'III AIDS A' created.")
+            else:
+                print(f"[DB Init] ClassRoom exists: {c_aids.name}")
+        except Exception as e:
+            db.rollback()
+            print(f"[DB Init] ERROR in classroom seed: {e}")
+            raise
+
+        # Step 3: Default User Accounts
+        try:
+            default_users = [
+                {"username": "admin",       "password": "admin123", "full_name": "System Administrator",      "role": UserRole.ADMIN.value,  "dept": False},
+                {"username": "hod_aids",    "password": "hod123",   "full_name": "Dr. Aris (HOD AI & DS)",    "role": UserRole.HOD.value,   "dept": True},
+                {"username": "staff_hari",  "password": "staff123", "full_name": "Prof. Hari (Faculty)",      "role": UserRole.STAFF.value,  "dept": True},
+                {"username": "class_3aids_a","password": "class123","full_name": "Smartboard III AIDS A",      "role": UserRole.CLASS.value,  "dept": True},
+            ]
+            for u in default_users:
+                if not db.query(User).filter(User.username == u["username"]).first():
+                    db.add(User(
+                        username=u["username"],
+                        password_hash=get_password_hash(u["password"]),
+                        full_name=u["full_name"],
+                        role=u["role"],
+                        department_id=dept.id if u["dept"] else None
+                    ))
+                    print(f"[DB Init] User '{u['username']}' ({u['role']}) created.")
             db.commit()
-            db.refresh(dept)
+            print("[DB Init] All default accounts verified/created OK.")
+        except Exception as e:
+            db.rollback()
+            print(f"[DB Init] ERROR in user accounts seed: {e}")
+            raise
 
-        # 2. Class
-        c_aids = db.query(ClassRoom).filter(ClassRoom.name == "III AIDS A").first()
-        if not c_aids:
-            c_aids = ClassRoom(name="III AIDS A", department_id=dept.id)
-            db.add(c_aids)
-            db.commit()
-            db.refresh(c_aids)
-
-        # 3. Default Accounts
-        # Admin
-        if not db.query(User).filter(User.username == "admin").first():
-            db.add(User(
-                username="admin",
-                password_hash=get_password_hash("admin123"),
-                full_name="System Administrator",
-                role=UserRole.ADMIN.value
-            ))
-
-        # HOD
-        if not db.query(User).filter(User.username == "hod_aids").first():
-            db.add(User(
-                username="hod_aids",
-                password_hash=get_password_hash("hod123"),
-                full_name="Dr. Aris (HOD AI & DS)",
-                role=UserRole.HOD.value,
-                department_id=dept.id
-            ))
-
-        # Staff
-        if not db.query(User).filter(User.username == "staff_hari").first():
-            db.add(User(
-                username="staff_hari",
-                password_hash=get_password_hash("staff123"),
-                full_name="Prof. Hari (Faculty)",
-                role=UserRole.STAFF.value,
-                department_id=dept.id
-            ))
-
-        # Class Smartboard
-        if not db.query(User).filter(User.username == "class_3aids_a").first():
-            db.add(User(
-                username="class_3aids_a",
-                password_hash=get_password_hash("class123"),
-                full_name="Smartboard III AIDS A",
-                role=UserRole.CLASS.value,
-                department_id=dept.id
-            ))
-
-        db.commit()
-
-        # 5. Check and auto-ingest "I Year AIDS A Sec Students Photo.zip" if present and students table is empty
-        zip_candidates = list(BASE_DIR.glob("*.zip"))
-        if zip_candidates and db.query(Student).count() == 0:
-            zip_path = zip_candidates[0]
-            print(f"[Startup] Found initial student ZIP dataset: {zip_path.name}. Auto-processing...")
-            try:
+        # Step 4: Auto-ingest student ZIP dataset on fresh deployment
+        try:
+            zip_candidates = list(BASE_DIR.glob("*.zip"))
+            if zip_candidates and db.query(Student).count() == 0:
+                zip_path = zip_candidates[0]
+                print(f"[DB Init] Auto-ingesting student dataset: {zip_path.name}...")
                 summary = process_zip_dataset(str(zip_path), c_aids.id, db)
-                print(f"[Startup] Dataset Ingestion Complete! Processed {summary['successfully_processed']} / {summary['total_students']} students.")
-            except Exception as e:
-                print(f"[Startup] Error ingesting initial ZIP dataset: {e}")
+                print(f"[DB Init] Dataset ingestion complete: {summary['successfully_processed']}/{summary['total_students']} students processed.")
+            else:
+                student_count = db.query(Student).count()
+                print(f"[DB Init] Student table has {student_count} records — skipping ZIP auto-ingest.")
+        except Exception as e:
+            print(f"[DB Init] WARNING: ZIP auto-ingest failed (non-critical): {e}")
+
+        print("[DB Init] Database initialization complete.")
 
     finally:
         db.close()
 
 
-# Synchronously ensure database and default accounts exist on serverless cold start
+# Synchronously ensure database and default accounts exist on cold start
 try:
     seed_database()
 except Exception as e:
-    print(f"[Auto-Init] Database seed exception: {e}")
+    print(f"[Auto-Init] FATAL: Database seed failed — {e}. App may be degraded.")
 
 
 @app.on_event("startup")
 def startup_event():
     print("[Startup] App started. Database ready.")
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint — reports database connectivity, table counts, and system status."""
+    from sqlalchemy import text
+    status = {"status": "ok", "database": {}, "errors": []}
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        status["database"]["connection"] = "ok"
+        status["database"]["students"]   = db.query(Student).count()
+        status["database"]["users"]       = db.query(User).count()
+        status["database"]["sessions"]    = db.execute(text("SELECT COUNT(*) FROM attendance_sessions")).scalar()
+        status["database"]["embeddings"]  = db.execute(text("SELECT COUNT(*) FROM student_face_embeddings")).scalar()
+    except Exception as e:
+        status["status"] = "error"
+        status["database"]["connection"] = "FAILED"
+        status["errors"].append(str(e))
+    finally:
+        db.close()
+    return status
+
+
+@app.post("/api/db-reset")
+def db_reset():
+    """Emergency endpoint to re-run database seed on Render cold-start or after schema migration."""
+    try:
+        seed_database()
+        db = SessionLocal()
+        student_count = db.query(Student).count()
+        user_count = db.query(User).count()
+        db.close()
+        return {
+            "status": "success",
+            "message": "Database re-initialized successfully.",
+            "students": student_count,
+            "users": user_count
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/")

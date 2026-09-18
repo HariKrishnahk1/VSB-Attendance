@@ -15,8 +15,9 @@ from backend.models import Student, AttendanceSession, AttendanceRecord, User
 client = TestClient(app)
 
 
-def test_auth():
-    print("\n--- 1. Testing Authentication ---")
+import pytest
+
+def get_tokens():
     roles = [
         ("admin", "admin123", "ADMIN"),
         ("hod_aids", "hod123", "HOD"),
@@ -34,6 +35,38 @@ def test_auth():
     return tokens
 
 
+@pytest.fixture(scope="module")
+def tokens():
+    return get_tokens()
+
+
+def create_session(tokens):
+    class_headers = {"Authorization": f"Bearer {tokens['CLASS']}"}
+    classes = client.get("/api/admin/classes").json()
+    class_id = classes[0]["id"]
+    dummy_b64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+    frames = [dummy_b64] * 24
+
+    res = client.post(
+        "/api/attendance/process-frames",
+        json={"class_id": class_id, "frames": frames},
+        headers=class_headers
+    )
+    assert res.status_code == 200, f"Process frames failed: {res.text}"
+    session_data = res.json()
+    return session_data["session_id"]
+
+
+@pytest.fixture(scope="module")
+def session_id(tokens):
+    return create_session(tokens)
+
+
+def test_auth():
+    t = get_tokens()
+    assert t is not None
+
+
 def test_dataset_ingestion():
     print("\n--- 2. Testing Database Ingestion Metrics ---")
     db = SessionLocal()
@@ -45,28 +78,9 @@ def test_dataset_ingestion():
         db.close()
 
 
-def test_smartboard_session(tokens):
+def test_smartboard_session(tokens, session_id):
     print("\n--- 3. Testing Smartboard Multi-Frame Attendance Capture ---")
-    class_headers = {"Authorization": f"Bearer {tokens['CLASS']}"}
-    
-    # Get classes
-    classes = client.get("/api/admin/classes").json()
-    class_id = classes[0]["id"]
-
-    # Generate 24 sample frames (representing 6-second hardware autofocus sweep burst at 250ms interval)
-    dummy_b64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-    frames = [dummy_b64] * 24
-
-    res = client.post(
-        "/api/attendance/process-frames",
-        json={"class_id": class_id, "frames": frames},
-        headers=class_headers
-    )
-    assert res.status_code == 200, f"Process frames failed: {res.text}"
-    session_data = res.json()
-    print(f"[OK] Smartboard Session created (6s / 24-frame focal sweep): ID #{session_data['session_id']}")
-    print(f"  Total Roster: {session_data['total_students']}, Present: {session_data['present_count']}, Pending: {session_data['pending_count']}, Absent: {session_data['absent_count']}")
-    return session_data["session_id"]
+    assert session_id is not None
 
 
 def test_staff_review_and_excel(tokens, session_id):
@@ -121,9 +135,12 @@ def test_hod_dashboard(tokens):
 
 if __name__ == "__main__":
     print("Starting System Integration Tests...")
-    tokens = test_auth()
+    t = get_tokens()
     test_dataset_ingestion()
-    sid = test_smartboard_session(tokens)
-    test_staff_review_and_excel(tokens, sid)
-    test_hod_dashboard(tokens)
+    sid = create_session(t)
+    test_smartboard_session(t, sid)
+    test_staff_review_and_excel(t, sid)
+    test_hod_dashboard(t)
     print("\n[SUCCESS] ALL VERIFICATION TESTS PASSED SUCCESSFULLY!")
+
+

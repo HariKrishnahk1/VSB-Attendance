@@ -17,8 +17,8 @@ from backend.config import (
 YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 SFACE_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
 
-# Optimized for 70 to 80 Students High-Density Classroom / Lecture Hall
-HIGH_DENSITY_SCORE_THRESHOLD = 0.40
+# Optimized for 70 to 80 Students High-Density & Far Back-Row Long-Distance Classroom Layout
+HIGH_DENSITY_SCORE_THRESHOLD = 0.20  # Lowered from 0.40 to capture small, far-distance back-row faces
 MAX_CLASSROOM_DETECTIONS = 5000
 
 
@@ -43,7 +43,7 @@ class VisionEngine:
         return cls._instance
 
     def _init_models(self):
-        print("[VisionEngine] Initializing 70-80 Student High-Density Classroom YuNet & SFace models...")
+        print("[VisionEngine] Initializing Ultra Far-Distance & High-Density Classroom YuNet & SFace models...")
         _ensure_model_exists(YUNET_MODEL_PATH, YUNET_URL)
         _ensure_model_exists(SFACE_MODEL_PATH, SFACE_URL)
 
@@ -62,8 +62,8 @@ class VisionEngine:
             MAX_CLASSROOM_DETECTIONS
         )
         self.recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL_PATH, "")
-        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        print("[VisionEngine] 70-80 Student High-Density Vision Engine Ready!")
+        self.clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        print("[VisionEngine] Long-Distance Multi-Scale Vision Engine Ready!")
 
     def enhance_contrast(self, img_bgr):
         """Enhances contrast on luminance channel to sharpen far-row seats without lens focus shift."""
@@ -76,42 +76,64 @@ class VisionEngine:
         except Exception:
             return img_bgr
 
+    def sharpen_small_crop(self, crop_img):
+        """Applies Unsharp Masking + Contrast boost to small far-distance face crops to restore facial landmarks."""
+        try:
+            if crop_img is None or crop_img.size == 0:
+                return crop_img
+            # Contrast boost
+            enhanced = self.enhance_contrast(crop_img)
+            # Unsharp masking filter (High-pass feature restoration)
+            blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2.0)
+            sharpened = cv2.addWeighted(enhanced, 1.6, blurred, -0.6, 0)
+            return sharpened
+        except Exception:
+            return crop_img
+
     def detect_faces(self, img_bgr):
         """
-        Detects faces across a dense 70-80 student classroom layout.
-        Uses Fast-Path Full Frame Pass + CLAHE Contrast + Conditional 3x3 Grid Tiling.
-        Thread-safe OpenCV C++ DNN Execution.
+        Detects faces across a dense classroom layout including far back-row seats.
+        Combines:
+          1. Full-Frame Standard Detection (YuNet @ 0.20 score threshold)
+          2. Full-Frame CLAHE Contrast Enhanced Detection (for dark/shadowy back rows)
+          3. Multi-Tile 2x Zoom Pyramid Scan (upscales small far-away 15px faces to 30px+ clear faces)
+        Fuses all detections via IoU Non-Maximum Suppression.
         """
         h, w, _ = img_bgr.shape
         all_detected_faces = []
 
-        # 1. Fast Full-Frame Pass
+        # 1. Full-Frame Standard Pass
         with self._model_lock:
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
+            if faces_main is not None:
+                for f in faces_main:
+                    all_detected_faces.append(f)
 
-        if faces_main is not None and len(faces_main) > 0:
-            return self._suppress_duplicate_faces(faces_main)
-
-        # 2. If no faces detected in full frame, try CLAHE contrast enhanced frame for far rows
+        # 2. CLAHE Contrast Enhanced Full-Frame Pass for far-row shadows
         enhanced_img = self.enhance_contrast(img_bgr)
         with self._model_lock:
             self.detector.setInputSize((w, h))
             _, faces_enh = self.detector.detect(enhanced_img)
+            if faces_enh is not None:
+                for f in faces_enh:
+                    all_detected_faces.append(f)
 
-        if faces_enh is not None and len(faces_enh) > 0:
-            return self._suppress_duplicate_faces(faces_enh)
+        # 3. Multi-Tile 2x Zoom Pyramid Scan for Long-Distance / Back-Row Students
+        # Divide image into 12 overlapping sub-tiles (4 columns x 3 rows) with 30% overlap
+        tile_cols, tile_rows = 4, 3
+        qw = int(w / 2.5)
+        qh = int(h / 2.0)
+        
+        step_x = max(1, int((w - qw) / (tile_cols - 1))) if tile_cols > 1 else w
+        step_y = max(1, int((h - qh) / (tile_rows - 1))) if tile_rows > 1 else h
 
-        # 3. High-resolution grid tiling for back rows & dense seating
-        qw, qh = int(w * 0.4), int(h * 0.4)
-        overlap_x = int(w * 0.3)
-        overlap_y = int(h * 0.3)
-
-        tiles = [
-            (0, 0, qw, qh), (overlap_x, 0, qw, qh), (w - qw, 0, qw, qh),
-            (0, overlap_y, qw, qh), (overlap_x, overlap_y, qw, qh), (w - qw, overlap_y, qw, qh),
-            (0, h - qh, qw, qh), (overlap_x, h - qh, qw, qh), (w - qw, h - qh, qw, qh)
-        ]
+        tiles = []
+        for r in range(tile_rows):
+            ty = min(r * step_y, h - qh)
+            for c in range(tile_cols):
+                tx = min(c * step_x, w - qw)
+                tiles.append((tx, ty, qw, qh))
 
         with self._model_lock:
             for tx, ty, tw, th in tiles:
@@ -119,19 +141,29 @@ class VisionEngine:
                 if tile_crop.size == 0:
                     continue
 
-                self.detector.setInputSize((tw, th))
-                _, tile_faces = self.detector.detect(tile_crop)
+                # 2x Upscale tile to make tiny far-away back-row faces 2x larger & clearly detectable
+                zoomed_tile = cv2.resize(tile_crop, (tw * 2, th * 2), interpolation=cv2.INTER_CUBIC)
+                self.detector.setInputSize((tw * 2, th * 2))
+                _, tile_faces = self.detector.detect(zoomed_tile)
+                
                 if tile_faces is not None:
                     for f in tile_faces:
                         f_mapped = f.copy()
-                        f_mapped[0] = tx + f[0]
-                        f_mapped[1] = ty + f[1]
+                        # Scale back coordinates from 2x tile space to original image space
+                        f_mapped[0] = tx + (f[0] / 2.0)
+                        f_mapped[1] = ty + (f[1] / 2.0)
+                        f_mapped[2] = f[2] / 2.0  # width
+                        f_mapped[3] = f[3] / 2.0  # height
+                        # Scale facial landmarks (x0..x4, y0..y4)
+                        for lm in range(4, 14, 2):
+                            f_mapped[lm] = tx + (f[lm] / 2.0)
+                            f_mapped[lm + 1] = ty + (f[lm + 1] / 2.0)
                         all_detected_faces.append(f_mapped)
 
         if not all_detected_faces:
             return []
 
-        return self._suppress_duplicate_faces(all_detected_faces)
+        return self._suppress_duplicate_faces(all_detected_faces, iou_threshold=0.35)
 
     def _suppress_duplicate_faces(self, face_list, iou_threshold=0.35):
         if face_list is None:
@@ -175,24 +207,30 @@ class VisionEngine:
     def extract_embedding(self, img_bgr, face_data):
         """
         Extracts 128-D facial feature vector using SFace landmark alignment and L2 normalization.
-        Thread-safe OpenCV C++ DNN Execution.
+        Applies Unsharp Masking & Enhancement for small far-distance face crops.
         """
         aligned_face = None
+        box = face_data[:4].astype(int)
+        x, y, bw, bh = box
+
+        # If face crop is small (far-distance back-row student), enhance crop before feature extraction
+        is_far_distance = (bw < 55 or bh < 55)
+
         with self._model_lock:
             try:
-                if len(face_data) >= 14:
+                if len(face_data) >= 14 and not is_far_distance:
                     aligned_face = self.recognizer.alignCrop(img_bgr, face_data)
             except Exception:
                 aligned_face = None
 
             if aligned_face is None or aligned_face.size == 0:
-                box = face_data[:4].astype(int)
-                x, y, bw, bh = box
                 img_h, img_w, _ = img_bgr.shape
-                x, y = max(0, x), max(0, y)
+                x_clamped, y_clamped = max(0, x), max(0, y)
+                crop = img_bgr[y_clamped:min(y_clamped+bh, img_h), x_clamped:min(x_clamped+bw, img_w)]
                 
-                crop = img_bgr[y:min(y+bh, img_h), x:min(x+bw, img_w)]
                 if crop.size > 0:
+                    if is_far_distance:
+                        crop = self.sharpen_small_crop(crop)
                     aligned_face = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_CUBIC)
                 else:
                     return np.zeros(128, dtype=np.float32)
@@ -204,6 +242,7 @@ class VisionEngine:
         if norm > 0:
             feat_flat = feat_flat / norm
         return feat_flat
+
 
     def compare_embeddings_batch(self, detected_vec, ref_matrix):
         """

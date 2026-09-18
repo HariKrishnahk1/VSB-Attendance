@@ -90,7 +90,7 @@ class VisionEngine:
         except Exception:
             return crop_img
 
-    def detect_faces(self, img_bgr):
+    def detect_faces(self, img_bgr, is_classroom: bool = True):
         """
         High-Accuracy, Multi-Distance Face Detection for Classroom Smartboards.
         Pass 1: Full-frame native inference at standard threshold (front & middle rows).
@@ -98,6 +98,7 @@ class VisionEngine:
                 at sensitive score threshold (0.38) to cleanly resolve far back-row 15-25px faces.
         Pass 3 (Adaptive): If seating plane is dark (shadowy back rows), apply CLAHE contrast boost.
         All detections are fused via IoU NMS to eliminate duplicates.
+        When is_classroom=False (e.g. during enrollment portraits), only Pass 1 is run to conserve memory.
         """
         if img_bgr is None or img_bgr.size == 0:
             return []
@@ -114,30 +115,31 @@ class VisionEngine:
                 for f in faces_main:
                     all_detected_faces.append(f)
 
-            # Pass 2: High-Sensitivity Distance Seating-Plane Scan (top 78% of view)
-            split_h = int(h * 0.78)
-            if split_h > 80 and w > 120:
-                upper_roi = img_bgr[0:split_h, 0:w]
-                scale = 1.65
-                target_w = int(w * scale)
-                target_h = int(split_h * scale)
-                zoomed_roi = cv2.resize(upper_roi, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+            # Pass 2 & 3: Distant Seating-Plane Scan (ONLY for live classroom smartboard frames)
+            if is_classroom:
+                split_h = int(h * 0.78)
+                if split_h > 80 and w > 120:
+                    upper_roi = img_bgr[0:split_h, 0:w]
+                    scale = 1.65
+                    target_w = int(w * scale)
+                    target_h = int(split_h * scale)
+                    zoomed_roi = cv2.resize(upper_roi, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
-                # Set sensitivity to 0.38 for the zoomed distant seating plane
-                self.detector.setScoreThreshold(0.38)
-                self.detector.setInputSize((target_w, target_h))
-                _, roi_faces = self.detector.detect(zoomed_roi)
-                if roi_faces is not None and len(roi_faces) > 0:
-                    for f in roi_faces:
-                        f_mapped = f.copy()
-                        f_mapped[0] = f[0] / scale
-                        f_mapped[1] = f[1] / scale
-                        f_mapped[2] = f[2] / scale
-                        f_mapped[3] = f[3] / scale
-                        for lm in range(4, 14, 2):
-                            f_mapped[lm] = f[lm] / scale
-                            f_mapped[lm + 1] = f[lm + 1] / scale
-                        all_detected_faces.append(f_mapped)
+                    # Set sensitivity to 0.38 for the zoomed distant seating plane
+                    self.detector.setScoreThreshold(0.38)
+                    self.detector.setInputSize((target_w, target_h))
+                    _, roi_faces = self.detector.detect(zoomed_roi)
+                    if roi_faces is not None and len(roi_faces) > 0:
+                        for f in roi_faces:
+                            f_mapped = f.copy()
+                            f_mapped[0] = f[0] / scale
+                            f_mapped[1] = f[1] / scale
+                            f_mapped[2] = f[2] / scale
+                            f_mapped[3] = f[3] / scale
+                            for lm in range(4, 14, 2):
+                                f_mapped[lm] = f[lm] / scale
+                                f_mapped[lm + 1] = f[lm + 1] / scale
+                            all_detected_faces.append(f_mapped)
 
                 # Pass 3: Adaptive Shadow Enhancement for dim classroom corners
                 gray_upper = cv2.cvtColor(upper_roi, cv2.COLOR_BGR2GRAY)
@@ -379,7 +381,14 @@ class VisionEngine:
         if img is None:
             return {"status": "INVALID_IMAGE", "message": "Failed to decode image file."}
 
-        faces = self.detect_faces(img)
+        # Memory optimization: Standardize portrait resolution to max dimension 960 to prevent DNN buffer ballooning
+        h_orig, w_orig = img.shape[:2]
+        max_dim = max(h_orig, w_orig)
+        if max_dim > 960:
+            scale_factor = 960.0 / max_dim
+            img = cv2.resize(img, (int(w_orig * scale_factor), int(h_orig * scale_factor)), interpolation=cv2.INTER_AREA)
+
+        faces = self.detect_faces(img, is_classroom=False)
         if len(faces) == 0:
             return {"status": "NO_FACE", "message": "No face detected in image."}
 
@@ -412,7 +421,7 @@ class VisionEngine:
         try:
             h_img, w_img, _ = img.shape
             small_img = cv2.resize(img, (int(w_img * 0.45), int(h_img * 0.45)), interpolation=cv2.INTER_AREA)
-            small_faces = self.detect_faces(small_img)
+            small_faces = self.detect_faces(small_img, is_classroom=False)
             if small_faces:
                 f_small = max(small_faces, key=lambda f: f[2] * f[3])
                 emb_dist = self.extract_embedding(small_img, f_small)
@@ -423,7 +432,7 @@ class VisionEngine:
         # C. Micro-Perspective Horizontal Flip Template (handles slight face angle variations)
         try:
             flip_img = cv2.flip(img, 1)
-            flip_faces = self.detect_faces(flip_img)
+            flip_faces = self.detect_faces(flip_img, is_classroom=False)
             if flip_faces:
                 f_flip = max(flip_faces, key=lambda f: f[2] * f[3])
                 emb_flip = self.extract_embedding(flip_img, f_flip)
@@ -559,6 +568,16 @@ def process_zip_dataset(zip_file_path: str, class_id: int, db_session):
                         "status": status,
                         "message": res.get("message", "Processing failed.")
                     })
+
+                # Memory optimization: flush, commit and trigger garbage collection every student
+                import gc
+                try:
+                    db_session.commit()
+                except Exception:
+                    pass
+                del res
+                del source_stream
+                gc.collect()
 
         db_session.commit()
     except Exception as e:

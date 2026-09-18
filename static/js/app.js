@@ -33,7 +33,16 @@ async function apiCall(endpoint, options = {}) {
 
   options.headers = headers;
 
-  const response = await fetch(endpoint, options);
+  let response;
+  try {
+    response = await fetch(endpoint, options);
+  } catch (netErr) {
+    if (window.location.protocol === 'file:') {
+      throw new Error('You opened the HTML file directly. Please access the portal at http://localhost:8000 instead.');
+    }
+    throw new Error('Cannot connect to backend server. Ensure the server is running on http://localhost:8000.');
+  }
+
   if (response.status === 401 && endpoint !== '/api/auth/login') {
     if (state.token) {
       logout();

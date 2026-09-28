@@ -540,8 +540,8 @@ async function startSmartboardAttendance() {
     }, 300);
   }
 
-  const captureWidth = (video.videoWidth && video.videoWidth > 0) ? Math.min(1920, video.videoWidth) : 1280;
-  const captureHeight = (video.videoHeight && video.videoHeight > 0) ? Math.min(1080, video.videoHeight) : 720;
+  const captureWidth = 1280;
+  const captureHeight = 720;
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;
@@ -561,7 +561,7 @@ async function startSmartboardAttendance() {
 
   const capturedFrames = [];
   const captureDurationMs = 2000; // 2.0 seconds high-definition capture
-  const intervalMs = 250; // 8 high-resolution keyframes for optimal speed and far-row detail
+  const intervalMs = 250; // 8 keyframes across focal sweep
   const startTime = Date.now();
 
   const timer = setInterval(() => {
@@ -569,14 +569,14 @@ async function startSmartboardAttendance() {
 
     if (state.webcamStream && video.readyState === 4) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.95));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.85));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.82));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.85));
     }
 
     if (elapsed >= captureDurationMs) {

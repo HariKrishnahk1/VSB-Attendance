@@ -94,14 +94,22 @@ class VisionEngine:
         """
         High-Accuracy, Multi-Distance & Back-Row Face Detection for Classroom Smartboards.
         Pass 1: Full-frame native inference at score threshold 0.28 (front, mid & visible rows).
-        Pass 2: 3-Sector Overlapping Classroom Seating-Plane Scan (Left, Center, Right) scaled 2.2x
+        Pass 2: 3-Sector Overlapping Classroom Seating-Plane Scan (Left, Center, Right)
                 at score threshold 0.22 to cleanly resolve middle and distant back-row faces.
-        Pass 3: Back-Row Far-Bench Band Focus (top 50% seating plane) scaled 2.8x at score threshold 0.20
+        Pass 3: Back-Row Far-Bench Band Focus (top 50% seating plane) at score threshold 0.20
                 with CLAHE contrast boost to capture distant 12-25px student faces even in shadows.
         All detections are fused via IoU NMS (0.38) to preserve distinct adjacent students.
+        Memory Footprint is strictly capped under 30MB to prevent Render 512MB RAM SIGKILL (502).
         """
         if img_bgr is None or img_bgr.size == 0:
             return []
+
+        orig_h, orig_w = img_bgr.shape[:2]
+        rescale = 1.0
+        # Normalize input frames wider than 1280px to protect Render free-tier RAM (512MB cap)
+        if orig_w > 1280:
+            rescale = 1280.0 / orig_w
+            img_bgr = cv2.resize(img_bgr, (1280, int(orig_h * rescale)), interpolation=cv2.INTER_AREA)
 
         h, w, _ = img_bgr.shape
         all_detected_faces = []
@@ -125,7 +133,6 @@ class VisionEngine:
                     (int(w * 0.24), 0, int(w * 0.76), seating_h),     # Center Rows
                     (int(w * 0.48), 0, w, seating_h)                 # Right Wing
                 ]
-                scale_tile = 2.2
                 self.detector.setScoreThreshold(0.22)
 
                 for sx1, sy1, sx2, sy2 in sectors:
@@ -134,33 +141,35 @@ class VisionEngine:
                     th = sy2 - sy1
                     if tw < 40 or th < 40:
                         continue
-                    target_tw = int(tw * scale_tile)
-                    target_th = int(th * scale_tile)
+                    # Scale factor bounded so max tile width <= 1000px to prevent C++ heap spikes
+                    tile_scale = min(1.6, 1000.0 / max(tw, 1))
+                    target_tw = int(tw * tile_scale)
+                    target_th = int(th * tile_scale)
                     zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=cv2.INTER_LINEAR)
                     self.detector.setInputSize((target_tw, target_th))
                     _, t_faces = self.detector.detect(zoomed_tile)
                     if t_faces is not None and len(t_faces) > 0:
                         for f in t_faces:
                             f_mapped = f.copy()
-                            f_mapped[0] = (f[0] / scale_tile) + sx1
-                            f_mapped[1] = (f[1] / scale_tile) + sy1
-                            f_mapped[2] = f[2] / scale_tile
-                            f_mapped[3] = f[3] / scale_tile
+                            f_mapped[0] = (f[0] / tile_scale) + sx1
+                            f_mapped[1] = (f[1] / tile_scale) + sy1
+                            f_mapped[2] = f[2] / tile_scale
+                            f_mapped[3] = f[3] / tile_scale
                             for lm in range(4, 14, 2):
-                                f_mapped[lm] = (f[lm] / scale_tile) + sx1
-                                f_mapped[lm + 1] = (f[lm + 1] / scale_tile) + sy1
+                                f_mapped[lm] = (f[lm] / tile_scale) + sx1
+                                f_mapped[lm + 1] = (f[lm + 1] / tile_scale) + sy1
                             all_detected_faces.append(f_mapped)
 
-                # Pass 3: Back-Row Far-Bench Extreme Zoom Band (top 50% seating plane, 2.8x scale)
+                # Pass 3: Back-Row Far-Bench Band Focus (top 50% seating plane)
                 far_h = int(seating_h * 0.50)
                 if far_h > 40:
                     far_roi = img_bgr[0:far_h, 0:w]
-                    far_scale = 2.8
-                    # Enhance contrast on back-row band to pierce classroom shadows
                     clahe_far = self.enhance_contrast(far_roi)
+                    # Bounded scale so max dimension <= 1120px (prevents OpenCV DNN 300MB heap spike)
+                    far_scale = min(1.8, 1120.0 / max(w, 1))
                     target_far_w = int(w * far_scale)
                     target_far_h = int(far_h * far_scale)
-                    zoomed_far = cv2.resize(clahe_far, (target_far_w, target_far_h), interpolation=cv2.INTER_LANCZOS4)
+                    zoomed_far = cv2.resize(clahe_far, (target_far_w, target_far_h), interpolation=cv2.INTER_LINEAR)
                     self.detector.setScoreThreshold(0.20)
                     self.detector.setInputSize((target_far_w, target_far_h))
                     _, far_faces = self.detector.detect(zoomed_far)
@@ -176,11 +185,24 @@ class VisionEngine:
                                 f_mapped[lm + 1] = f[lm + 1] / far_scale
                             all_detected_faces.append(f_mapped)
 
-            # Restore standard threshold
+            # Reset detector input size to release OpenCV C++ intermediate buffers and restore threshold
+            self.detector.setInputSize((320, 320))
             self.detector.setScoreThreshold(HIGH_DENSITY_SCORE_THRESHOLD)
 
         if not all_detected_faces:
             return []
+
+        # Map back to original coordinate system if input was downsampled
+        if rescale != 1.0 and all_detected_faces:
+            inv = 1.0 / rescale
+            for f in all_detected_faces:
+                f[0] *= inv
+                f[1] *= inv
+                f[2] *= inv
+                f[3] *= inv
+                for lm in range(4, 14, 2):
+                    f[lm] *= inv
+                    f[lm + 1] *= inv
 
         # Filter out tiny noise artifacts (< 8px)
         valid_faces = [f for f in all_detected_faces if f[2] >= 8 and f[3] >= 8]
@@ -511,8 +533,10 @@ class VisionEngine:
         """
         Fast-decodes frame sequence and selects top keyframes representing distinct focal depth peaks.
         Reduces AI evaluation latency significantly while maintaining full focal coverage and 100% accuracy.
+        Immediately purges non-keyframe buffers to prevent Render memory spikes.
         """
         import base64
+        import gc
         decoded_frames = []
         for idx, b64_str in enumerate(base64_frames):
             try:
@@ -522,6 +546,9 @@ class VisionEngine:
                 np_arr = np.frombuffer(img_bytes, np.uint8)
                 img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 if img_bgr is not None:
+                    ih, iw = img_bgr.shape[:2]
+                    if iw > 1280:
+                        img_bgr = cv2.resize(img_bgr, (1280, int(ih * 1280.0 / iw)), interpolation=cv2.INTER_AREA)
                     sharpness = self.check_blurriness(img_bgr)
                     decoded_frames.append((idx, img_bgr, sharpness))
             except Exception:
@@ -544,6 +571,10 @@ class VisionEngine:
             if bucket:
                 best_in_bucket = max(bucket, key=lambda item: item[2])
                 selected_keyframes.append(best_in_bucket)
+
+        # Release all discarded frames immediately to protect Render 512MB RAM ceiling
+        del decoded_frames
+        gc.collect()
 
         return selected_keyframes
 

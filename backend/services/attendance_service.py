@@ -1,4 +1,5 @@
 import base64
+import gc
 import json
 import uuid
 import cv2
@@ -138,7 +139,7 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=8)
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=4)
     if not selected_keyframes:
         selected_keyframes = []
 
@@ -254,12 +255,16 @@ def process_smartboard_session(
                     "emb": meta["emb"]
                 })
 
+        del face_embs, sim_matrix, face_meta
+        gc.collect()
         return frame_idx, candidates
 
     # High-performance sequential execution utilizing OpenCV's native thread pool
     frame_results = []
     for kf_item in selected_keyframes:
         frame_results.append(_process_frame_worker(kf_item))
+    del selected_keyframes
+    gc.collect()
 
     # Sort results by frame index order
     frame_results.sort(key=lambda r: r[0])

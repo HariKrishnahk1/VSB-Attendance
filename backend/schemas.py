@@ -71,3 +71,10 @@ class AttendanceConfirmRequest(BaseModel):
 class ThresholdConfig(BaseModel):
     high_threshold: float
     medium_threshold: float
+
+
+class RecordUpdateRequest(BaseModel):
+    session_id: int
+    student_id: str
+    status: str
+

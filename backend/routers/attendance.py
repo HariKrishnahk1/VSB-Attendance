@@ -6,7 +6,7 @@ from backend.database import get_db
 from backend.models import (
     User, UserRole, AttendanceSession, AttendanceRecord, AttendanceReview, Student, ClassRoom, Subject
 )
-from backend.schemas import FrameProcessRequest, AttendanceConfirmRequest
+from backend.schemas import FrameProcessRequest, AttendanceConfirmRequest, RecordUpdateRequest
 from backend.services.auth_service import get_current_user, require_roles
 from backend.services.attendance_service import process_smartboard_session, confirm_staff_reviews
 from backend.services.excel_service import generate_attendance_excel
@@ -205,3 +205,60 @@ def get_attendance_history(
             "status": s.status
         })
     return res
+
+
+@router.post("/update-student-status")
+def update_student_status(
+    req: RecordUpdateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles([UserRole.CLASS, UserRole.STAFF, UserRole.ADMIN]))
+):
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == req.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    student = db.query(Student).filter(Student.student_id == req.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    record = db.query(AttendanceRecord).filter(
+        AttendanceRecord.session_id == req.session_id,
+        AttendanceRecord.student_id == student.id
+    ).first()
+
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found.")
+
+    old_status = record.status
+    new_status = req.status.upper()
+    if new_status not in ["PRESENT", "ABSENT", "REVIEW"]:
+        raise HTTPException(status_code=400, detail="Invalid status.")
+
+    if old_status != new_status:
+        if old_status == "PRESENT":
+            session.present_count = max(0, session.present_count - 1)
+        elif old_status == "ABSENT":
+            session.absent_count = max(0, session.absent_count - 1)
+        elif old_status == "REVIEW":
+            session.pending_count = max(0, session.pending_count - 1)
+
+        if new_status == "PRESENT":
+            session.present_count += 1
+        elif new_status == "ABSENT":
+            session.absent_count += 1
+        elif new_status == "REVIEW":
+            session.pending_count += 1
+
+        record.status = new_status
+        record.notes = f"Manually updated to {new_status} by {user.username}"
+        db.commit()
+
+    return {
+        "status": "success",
+        "student_id": req.student_id,
+        "new_status": new_status,
+        "present_count": session.present_count,
+        "absent_count": session.absent_count,
+        "pending_count": session.pending_count
+    }
+

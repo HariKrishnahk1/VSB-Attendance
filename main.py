@@ -154,8 +154,15 @@ def seed_database():
             else:
                 student_count = db.query(Student).count()
                 print(f"[DB Init] Student table has {student_count} records — skipping ZIP auto-ingest.")
+                # Auto-upgrade existing student embeddings to 10-template deep biometrics if needed
+                from backend.models import StudentFaceEmbedding
+                from backend.services.vision_service import reindex_all_students
+                total_embs = db.query(StudentFaceEmbedding).count()
+                if student_count > 0 and total_embs < (student_count * 8):
+                    print(f"[DB Init] Upgrading enrolled student templates ({total_embs} existing) to 10-Template Deep Biometrics...")
+                    reindex_all_students(db)
         except Exception as e:
-            print(f"[DB Init] WARNING: ZIP auto-ingest failed (non-critical): {e}")
+            print(f"[DB Init] WARNING: Ingestion/reindex check failed (non-critical): {e}")
 
         print("[DB Init] Database initialization complete.")
 

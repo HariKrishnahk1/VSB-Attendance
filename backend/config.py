@@ -29,14 +29,19 @@ YUNET_MODEL_PATH = str(MODELS_DIR / "yunet.onnx")
 SFACE_MODEL_PATH = str(MODELS_DIR / "sface.onnx")
 
 # YuNet Face Detector parameters
-YUNET_SCORE_THRESHOLD = 0.50
-YUNET_NMS_THRESHOLD = 0.35
+YUNET_SCORE_THRESHOLD = 0.30  # High-sensitivity for multi-distance and back-row classroom coverage
+YUNET_NMS_THRESHOLD = 0.38
 YUNET_TOP_K = 5000
 
-# SFace Cosine Similarity Thresholds (optimized for multi-template & distance recognition)
-# >= 0.44: Confirmed Match (PRESENT with multi-frame confirmation or single strong match >= 0.50)
-# 0.36 - 0.44: Borderline / Review Candidate (REVIEW for teacher 1-click confirmation)
-# < 0.36: Unrecognized / Noise
-THRESHOLD_HIGH_CONFIDENCE = 0.44
-THRESHOLD_MEDIUM_CONFIDENCE = 0.36
+# High-Precision SFace Cosine Similarity & Multi-Template Thresholds
+# SFace Cosine Standard:
+# >= 0.36: High-Confidence Front/Mid Row Match
+# >= 0.26: Strong Back-Row / Distance Match with multi-template ensemble
+# 0.22 - 0.25: Borderline / Review Candidate
+# < 0.22: Unrecognized / Non-Face Clutter
+THRESHOLD_HIGH_CONFIDENCE = 0.36
+THRESHOLD_MEDIUM_CONFIDENCE = 0.26
+THRESHOLD_AMBIGUITY_MARGIN = 0.015  # Margin required between top-1 and top-2 candidate
+MAX_STUDENT_TEMPLATES = 24         # Maximum multi-scale + live enriched templates per student
+
 

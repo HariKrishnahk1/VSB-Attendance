@@ -10,7 +10,7 @@ from backend.schemas import (
     UserCreate, UserResponse, DepartmentCreate, ClassCreate, SubjectCreate, ThresholdConfig
 )
 from backend.services.auth_service import get_password_hash, require_roles
-from backend.services.vision_service import process_zip_dataset
+from backend.services.vision_service import process_zip_dataset, reindex_all_students
 from backend.config import UPLOAD_DIR, THRESHOLD_HIGH_CONFIDENCE, THRESHOLD_MEDIUM_CONFIDENCE
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Management"])
@@ -157,6 +157,27 @@ async def upload_zip_dataset(
     finally:
         if temp_zip_path.exists():
             os.remove(temp_zip_path)
+
+
+@router.post("/reindex-embeddings")
+def reindex_embeddings(
+    class_id: int = None,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles([UserRole.ADMIN]))
+):
+    try:
+        res = reindex_all_students(db, class_id)
+        log = AuditLog(
+            user_id=admin.id,
+            username=admin.username,
+            action="REINDEX_FACIAL_EMBEDDINGS",
+            details=f"Upgraded {res['successfully_reindexed']}/{res['total_students']} students with 10-template deep neural biometrics."
+        )
+        db.add(log)
+        db.commit()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/students")

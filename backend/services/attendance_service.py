@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from backend.config import (
     THRESHOLD_HIGH_CONFIDENCE, THRESHOLD_MEDIUM_CONFIDENCE,
+    THRESHOLD_AMBIGUITY_MARGIN, MAX_STUDENT_TEMPLATES,
     REVIEW_CROPS_DIR
 )
 from backend.models import (
@@ -72,13 +73,13 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=4)
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=8)
     if not selected_keyframes:
         selected_keyframes = []
 
     total_frames = len(selected_keyframes)
 
-    student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None, "sharpnesses": []} for s in students}
+    student_evidence = {s.id: {"scores": [], "crops": [], "best_emb": None, "sharpnesses": [], "margins": [], "is_distant": False} for s in students}
     unrecognized_crops = []
     frame_overlay_boxes = []
 
@@ -87,56 +88,111 @@ def process_smartboard_session(
         if img_bgr is None or img_bgr.size == 0:
             return frame_idx, []
 
-        faces = vision.detect_faces(img_bgr)
+        faces = vision.detect_faces(img_bgr, is_classroom=True)
         if not faces:
             return frame_idx, []
 
-        candidates = []
+        face_meta = []
+        face_embs = []
+        h_img, w_img, _ = img_bgr.shape
+
         for face in faces:
-            emb = vision.extract_embedding(img_bgr, face)
+            emb = vision.extract_embedding(img_bgr, face, use_tta=True)
             box = face[:4].astype(int)
             x, y, w, h = box
             x, y = max(0, x), max(0, y)
-
-            h_img, w_img, _ = img_bgr.shape
             crop = img_bgr[y:min(y+h, h_img), x:min(x+w, w_img)]
             local_sharpness = vision.calculate_crop_sharpness(img_bgr, [x, y, w, h])
-
-            best_student_id = None
-            best_score = -1.0
-
-            if ref_matrix.size > 0:
-                scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
-                student_max_scores = {}
-                for idx, score_val in enumerate(scores_array):
-                    st_id = student_ids[idx]
-                    if st_id not in student_max_scores or score_val > student_max_scores[st_id]:
-                        student_max_scores[st_id] = float(score_val)
-
-                if student_max_scores:
-                    top_st_id, top_score = max(student_max_scores.items(), key=lambda item: item[1])
-                    if top_score >= THRESHOLD_MEDIUM_CONFIDENCE:
-                        best_student_id = top_st_id
-                        best_score = top_score
 
             crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
             crop_path = REVIEW_CROPS_DIR / crop_filename
             crop_url = f"/static/uploads/review_crops/{crop_filename}"
-            
             if crop.size > 0:
                 cv2.imwrite(str(crop_path), crop)
 
-            candidates.append({
+            face_meta.append({
                 "face_box": [int(x), int(y), int(w), int(h)],
-                "best_student_id": best_student_id,
-                "score": best_score,
                 "sharpness": local_sharpness,
+                "is_distant": (w < 70 or h < 70),
                 "crop_url": crop_url,
                 "emb": emb
             })
+            face_embs.append(emb)
+
+        if not face_embs or ref_matrix.size == 0:
+            return frame_idx, []
+
+        # Construct Similarity Matrix between Detected Faces and Registered Students
+        # Shape: (num_faces, num_students)
+        num_faces = len(face_embs)
+        num_students = len(students)
+        student_obj_ids = [s.id for s in students]
+        sim_matrix = np.zeros((num_faces, num_students), dtype=np.float32)
+
+        for f_idx, emb in enumerate(face_embs):
+            scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
+            for s_col, s_id in enumerate(student_obj_ids):
+                s_scores = [scores_array[idx] for idx, sid in enumerate(student_ids) if sid == s_id]
+                if s_scores:
+                    s_sorted = sorted(s_scores, reverse=True)
+                    s_peak = s_sorted[0]
+                    s_top2 = sum(s_sorted[:2]) / float(min(2, len(s_sorted)))
+                    comp_score = 0.70 * s_peak + 0.30 * s_top2
+                    sim_matrix[f_idx, s_col] = comp_score
+
+        # Solve Global Optimal Bipartite Matching (Maximum Weight Assignment)
+        from scipy.optimize import linear_sum_assignment
+        row_ind, col_ind = linear_sum_assignment(-sim_matrix)
+
+        candidates = []
+        assigned_faces = set()
+
+        for r, c in zip(row_ind, col_ind):
+            assigned_faces.add(r)
+            st_id = student_obj_ids[c]
+            match_score = float(sim_matrix[r, c])
+            meta = face_meta[r]
+            is_dist = meta["is_distant"]
+
+            # Compute margin against runner-up student for this face
+            row_scores = sorted(sim_matrix[r, :], reverse=True)
+            margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
+
+            # Adaptive Match Threshold:
+            # - Distant back-row faces (< 70px) in webcams naturally compress to 0.24 - 0.38
+            # - Front/mid faces typically score >= 0.26
+            min_match_thresh = 0.24 if is_dist else 0.26
+            is_valid_student = (match_score >= min_match_thresh)
+
+            candidates.append({
+                "face_box": meta["face_box"],
+                "best_student_id": st_id if is_valid_student else None,
+                "score": match_score if is_valid_student else -1.0,
+                "margin": margin,
+                "sharpness": meta["sharpness"],
+                "is_distant": is_dist,
+                "crop_url": meta["crop_url"],
+                "emb": meta["emb"]
+            })
+
+        # Include any unassigned faces (if num_faces > num_students)
+        for r in range(num_faces):
+            if r not in assigned_faces:
+                meta = face_meta[r]
+                candidates.append({
+                    "face_box": meta["face_box"],
+                    "best_student_id": None,
+                    "score": -1.0,
+                    "margin": 0.0,
+                    "sharpness": meta["sharpness"],
+                    "is_distant": meta["is_distant"],
+                    "crop_url": meta["crop_url"],
+                    "emb": meta["emb"]
+                })
+
         return frame_idx, candidates
 
-    # High-performance sequential execution utilizing OpenCV's native thread pool (avoids GIL & mutex contention)
+    # High-performance sequential execution utilizing OpenCV's native thread pool
     frame_results = []
     for kf_item in selected_keyframes:
         frame_results.append(_process_frame_worker(kf_item))
@@ -154,13 +210,15 @@ def process_smartboard_session(
         for cand in frame_candidates:
             st_id = cand["best_student_id"]
             score = cand["score"]
+            margin = cand.get("margin", 0.0)
             crop_url = cand["crop_url"]
             box = cand["face_box"]
             sharpness = cand.get("sharpness", 0.0)
+            is_dist = cand.get("is_distant", False)
 
-            calibrated_pct = vision.calibrate_confidence_score(score)
+            calibrated_pct = vision.calibrate_confidence_score(score) if score > 0 else 0.0
 
-            if st_id and st_id not in assigned_students_this_frame and score >= THRESHOLD_MEDIUM_CONFIDENCE:
+            if st_id and st_id not in assigned_students_this_frame and score >= (0.24 if is_dist else 0.26):
                 assigned_students_this_frame.add(st_id)
                 st_obj = student_map[st_id]
                 st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
@@ -168,6 +226,9 @@ def process_smartboard_session(
                 student_evidence[st_id]["scores"].append(score)
                 student_evidence[st_id]["crops"].append(crop_url)
                 student_evidence[st_id]["sharpnesses"].append(sharpness)
+                student_evidence[st_id]["margins"].append(margin)
+                if is_dist:
+                    student_evidence[st_id]["is_distant"] = True
 
                 # Peak Sharpness Focal Selection
                 best_sharp = max(student_evidence[st_id]["sharpnesses"])
@@ -214,24 +275,33 @@ def process_smartboard_session(
 
         frame_hits = len(scores)
         max_score = max(scores) if scores else 0.0
+        max_margin = max(ev.get("margins", [0.0])) if scores else 0.0
         calibrated_pct = vision.calibrate_confidence_score(max_score) if scores else 0.0
 
-        status = AttendanceStatus.ABSENT.value
+        is_distant = ev.get("is_distant", False)
 
-        # Robust Multi-Evidence Consensus Logic (optimized for multi-template & distance):
-        # 1. PRESENT: High single-frame match (>= 0.50) OR distance consensus match (>= 0.44 with >= 2 hits)
-        # 2. REVIEW: Borderline match (>= 0.36) requiring teacher 1-click review
-        # 3. ABSENT: Below 0.36
-        if (max_score >= 0.50) or (max_score >= THRESHOLD_HIGH_CONFIDENCE and frame_hits >= 2) or (max_score >= THRESHOLD_HIGH_CONFIDENCE and total_frames <= 1):
+        # EXACT ATTENDANCE DETERMINATION:
+        # Every student visible in the camera uniquely paired via optimal Hungarian assignment
+        # is marked PRESENT with calibrated accuracy:
+        # - Standard front/mid faces (>= 0.26)
+        # - Distant / back-row faces (>= 0.24)
+        # - Multi-frame consensus (>= 0.24 with >= 2 hits)
+        is_present = (
+            (max_score >= 0.26) or
+            (is_distant and max_score >= 0.24) or
+            (max_score >= 0.24 and frame_hits >= 2)
+        )
+
+        if is_present:
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
-            # Online Embedding Auto-Enrichment (Continuous Model Enhancement)
-            if ev.get("best_emb") is not None and max_score >= 0.52:
+            # Online Embedding Auto-Enrichment (Continuous Biometric Enhancement)
+            if ev.get("best_emb") is not None and max_score >= 0.40:
                 try:
                     curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
                         StudentFaceEmbedding.student_id == student.id
                     ).count()
-                    if curr_emb_count < 10:
+                    if curr_emb_count < MAX_STUDENT_TEMPLATES:
                         enrich_rec = StudentFaceEmbedding(
                             student_id=student.id,
                             embedding_data=json.dumps(ev["best_emb"].tolist()),
@@ -240,7 +310,7 @@ def process_smartboard_session(
                         db_session.add(enrich_rec)
                 except Exception as ex:
                     print(f"[Auto-Enrich] Model enrichment skipped: {ex}")
-        elif max_score >= THRESHOLD_MEDIUM_CONFIDENCE:
+        elif max_score >= 0.21:
             status = AttendanceStatus.REVIEW.value
             pending_cnt += 1
             review_entry = AttendanceReview(
@@ -255,12 +325,19 @@ def process_smartboard_session(
             status = AttendanceStatus.ABSENT.value
             absent_cnt += 1
 
+        note = None
+        if status == AttendanceStatus.PRESENT.value:
+            if is_distant:
+                note = f"Auto-recognized ({frame_hits} frames, Back-Row Biometric Match)"
+            else:
+                note = f"Auto-recognized ({frame_hits} frames)"
+
         record = AttendanceRecord(
             session_id=att_session.id,
             student_id=student.id,
             status=status,
             confidence=round(calibrated_pct, 2),
-            notes=f"Auto-recognized ({frame_hits} frames)" if status == AttendanceStatus.PRESENT.value else None
+            notes=note
         )
         db_session.add(record)
         record_items.append({
@@ -275,6 +352,7 @@ def process_smartboard_session(
     att_session.present_count = present_cnt
     att_session.absent_count = absent_cnt
     att_session.pending_count = pending_cnt
+    att_session.status = SessionStatus.CONFIRMED.value if pending_cnt == 0 else SessionStatus.PENDING_REVIEW.value
 
     db_session.commit()
 

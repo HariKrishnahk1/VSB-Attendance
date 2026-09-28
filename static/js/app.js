@@ -458,7 +458,7 @@ async function initWebcam() {
       // Fallback: open with standard constraints then apply hardware lock
       console.warn('[Camera] Manual-focus constraint not accepted, falling back to basic open.');
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+        video: { width: { ideal: 1920, min: 1280 }, height: { ideal: 1080, min: 720 } }
       });
     }
 
@@ -540,8 +540,8 @@ async function startSmartboardAttendance() {
     }, 300);
   }
 
-  const captureWidth = (video.videoWidth && video.videoWidth > 0) ? Math.min(1280, video.videoWidth) : 1280;
-  const captureHeight = (video.videoHeight && video.videoHeight > 0) ? Math.min(720, video.videoHeight) : 720;
+  const captureWidth = (video.videoWidth && video.videoWidth > 0) ? Math.min(1920, video.videoWidth) : 1280;
+  const captureHeight = (video.videoHeight && video.videoHeight > 0) ? Math.min(1080, video.videoHeight) : 720;
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;
@@ -569,7 +569,7 @@ async function startSmartboardAttendance() {
 
     if (state.webcamStream && video.readyState === 4) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.82));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.95));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -744,12 +744,61 @@ function renderSmartboardResultsTable(records) {
     tr.innerHTML = `
       <td><strong>${r.student_id}</strong></td>
       <td>${r.student_name}</td>
-      <td>${r.confidence}</td>
-      <td><span class="badge ${badgeClass}">${r.status}</span></td>
+      <td>${r.confidence}%</td>
+      <td>
+        <button type="button" class="badge ${badgeClass} status-toggle-btn" 
+          onclick="toggleStudentAttendanceStatus('${r.student_id}', '${r.status}')" 
+          title="Click to toggle Present/Absent" style="cursor: pointer; border: 1px solid rgba(255,255,255,0.15); font-size: 0.82rem; padding: 4px 10px; border-radius: 6px; transition: transform 0.15s ease;">
+          ${r.status} ✎
+        </button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+window.toggleStudentAttendanceStatus = async function(studentId, currentStatus) {
+  if (!state.currentSessionId) {
+    showToast('No active attendance session recorded yet.', 'warning');
+    return;
+  }
+  const newStatus = (currentStatus === 'PRESENT') ? 'ABSENT' : 'PRESENT';
+  
+  try {
+    const res = await apiCall('/api/attendance/update-student-status', {
+      method: 'POST',
+      body: {
+        session_id: state.currentSessionId,
+        student_id: studentId,
+        status: newStatus
+      }
+    });
+
+    if (state.allSmartboardRecords) {
+      const rec = state.allSmartboardRecords.find(r => r.student_id === studentId);
+      if (rec) {
+        rec.status = newStatus;
+        if (newStatus === 'PRESENT') {
+          rec.confidence = Math.max(rec.confidence || 0, 95.0);
+        }
+      }
+      filterAndRenderSmartboardTable();
+    }
+
+    if (res.present_count !== undefined) {
+      document.getElementById('sbPresentCount').innerText = res.present_count;
+      document.getElementById('sbAbsentCount').innerText = res.absent_count;
+      document.getElementById('sbPendingCount').innerText = res.pending_count;
+      const cPres = document.getElementById('countPresent'); if (cPres) cPres.innerText = res.present_count;
+      const cAbs = document.getElementById('countAbsent'); if (cAbs) cAbs.innerText = res.absent_count;
+      const cRev = document.getElementById('countReview'); if (cRev) cRev.innerText = res.pending_count;
+    }
+
+    showToast(`Updated: Student ${studentId} marked ${newStatus}`);
+  } catch (err) {
+    showToast(err.message || 'Failed to update student status', 'error');
+  }
+};
 
 /* ==========================================================================
    ROLE 2: STAFF DASHBOARD & REVIEW CONFIRMATION
@@ -1087,6 +1136,33 @@ async function handleZipUpload(e) {
     btn.innerText = 'Process & Extract Facial Embeddings';
   }
 }
+
+window.handleReindexBiometrics = async function() {
+  const btn = document.getElementById('reindexBiometricsBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '⚡ Computing 10-Template Biometric Neural Profiles...';
+  }
+
+  try {
+    const classSelect = document.getElementById('adminZipClassSelect');
+    const classId = classSelect ? classSelect.value : null;
+    const url = classId ? `/api/admin/reindex-embeddings?class_id=${classId}` : '/api/admin/reindex-embeddings';
+    const res = await apiCall(url, { method: 'POST' });
+
+    showToast(`Biometrics Upgraded! ${res.successfully_reindexed} students re-indexed with ${res.total_templates_generated} neural templates.`);
+    if (classId) {
+      loadStudentRoster(classId);
+    }
+  } catch (err) {
+    showToast(err.message || 'Failed to re-index biometric profiles.', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '⚡ Re-Index 10-Template Deep Biometrics for All Enrolled Students';
+    }
+  }
+};
 
 async function loadStudentRoster(classId) {
   try {

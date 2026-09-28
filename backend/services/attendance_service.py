@@ -139,8 +139,8 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    # Use 6 keyframes (was 4) to get better temporal coverage across the video
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=6)
+    # 10 keyframes for full coverage of a wide classroom smartboard sweep
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=10)
     if not selected_keyframes:
         selected_keyframes = []
 
@@ -180,7 +180,7 @@ def process_smartboard_session(
             face_meta.append({
                 "face_box": [int(x), int(y), int(w), int(h)],
                 "sharpness": local_sharpness,
-                "is_distant": (w < 70 or h < 70),
+                "is_distant": (w < 90 or h < 90),  # 4K: mid-row faces are ~80-120px
                 "crop_url": crop_url,
                 "emb": emb
             })
@@ -227,19 +227,22 @@ def process_smartboard_session(
             row_scores = sorted(sim_matrix[r, :], reverse=True)
             margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
 
-            # Strict adaptive thresholds based on SFace cosine operating points:
-            # Face pixel size determines expected cosine degradation from distance.
-            # These thresholds are higher than before to eliminate false positives.
+            # Adaptive thresholds tuned for 4K smartboard face sizes:
+            # At 2560px native width a front-row face is ~150px, mid-row ~80px,
+            # back-row ~30-60px, and extreme back rows as small as ~10-20px.
             face_w, face_h = face_meta[r]["face_box"][2], face_meta[r]["face_box"][3]
-            if face_w < 35 or face_h < 35:      # extreme back-row (very small face)
+            if face_w < 20 or face_h < 20:      # extreme back-row (ultra-small, 4K specific)
+                min_match_thresh = 0.33
+                min_margin_thresh = 0.015
+            elif face_w < 50 or face_h < 50:    # back-row small face
                 min_match_thresh = 0.36
-                min_margin_thresh = 0.020
-            elif face_w < 70 or face_h < 70:    # mid-back row
-                min_match_thresh = 0.42
-                min_margin_thresh = 0.025
-            else:                                # front/mid row (clear face)
-                min_match_thresh = 0.48
-                min_margin_thresh = 0.030
+                min_margin_thresh = 0.018
+            elif face_w < 90 or face_h < 90:    # mid-row
+                min_match_thresh = 0.40
+                min_margin_thresh = 0.022
+            else:                                # front/mid-row (clear face)
+                min_match_thresh = 0.46
+                min_margin_thresh = 0.028
 
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
@@ -301,14 +304,16 @@ def process_smartboard_session(
 
             calibrated_pct = vision.calibrate_confidence_score(score) if score > 0 else 0.0
 
-            # Strict threshold check with same per-size thresholds as the worker
+            # Threshold check matching per-size values set in the worker
             face_w_ev = box[2] if box else 100
-            if face_w_ev < 35:
+            if face_w_ev < 20:
+                ev_thresh = 0.33
+            elif face_w_ev < 50:
                 ev_thresh = 0.36
-            elif face_w_ev < 70:
-                ev_thresh = 0.42
+            elif face_w_ev < 90:
+                ev_thresh = 0.40
             else:
-                ev_thresh = 0.48
+                ev_thresh = 0.46
 
             if st_id and st_id not in assigned_students_this_frame and score >= ev_thresh:
                 assigned_students_this_frame.add(st_id)

@@ -106,17 +106,27 @@ class VisionEngine:
 
         orig_h, orig_w = img_bgr.shape[:2]
         rescale = 1.0
-        # Normalize input frames wider than 1920px (Full HD) to protect Render RAM
-        if orig_w > 1920:
-            rescale = 1920.0 / orig_w
-            img_bgr = cv2.resize(img_bgr, (1920, int(orig_h * rescale)), interpolation=cv2.INTER_AREA)
+        # 4K smartboard: allow up to 2560px (QHD) to keep more detail for distant faces.
+        # Laptop/webcam frames (≤1920) are left at native resolution.
+        MAX_NATIVE_WIDTH = 2560
+        if orig_w > MAX_NATIVE_WIDTH:
+            rescale = MAX_NATIVE_WIDTH / orig_w
+            img_bgr = cv2.resize(
+                img_bgr,
+                (MAX_NATIVE_WIDTH, int(orig_h * rescale)),
+                interpolation=cv2.INTER_AREA
+            )
 
         h, w, _ = img_bgr.shape
         all_detected_faces = []
 
         with self._model_lock:
-            # Pass 1: Full-Frame Detection at native resolution
-            self.detector.setScoreThreshold(0.38 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD)
+            # -------------------------------------------------------------------
+            # PASS 1 - Full-frame native scan
+            # Threshold lowered for 4K smartboard: distant faces are small pixels
+            # -------------------------------------------------------------------
+            pass1_thresh = 0.30 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
+            self.detector.setScoreThreshold(pass1_thresh)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
             if faces_main is not None and len(faces_main) > 0:
@@ -124,16 +134,21 @@ class VisionEngine:
                     all_detected_faces.append(f)
 
             if is_classroom and h > 80 and w > 120:
-                seating_h = int(h * 0.90)
+                seating_h = int(h * 0.92)  # capture more of top seating rows
 
-                # Pass 2: 3-Sector Regional Classroom Seating Scan (Left, Center, Right)
-                # Overlapping sectors with Lanczos-4 zoom cleanly resolve middle and distant rows
+                # -------------------------------------------------------------------
+                # PASS 2 - 5-Sector Overlapping Mid-Distance Seating Scan
+                # 5 overlapping strips cover full classroom width.
+                # Tile zoom cap raised to 1920px (from 1280) for 4K sensors.
+                # -------------------------------------------------------------------
                 sectors = [
-                    (0, 0, int(w * 0.52), seating_h),               # Left Wing
-                    (int(w * 0.24), 0, int(w * 0.76), seating_h),     # Center Rows
-                    (int(w * 0.48), 0, w, seating_h)                 # Right Wing
+                    (0,              0, int(w * 0.42), seating_h),   # Far Left
+                    (int(w * 0.14),  0, int(w * 0.58), seating_h),  # Centre-Left
+                    (int(w * 0.29),  0, int(w * 0.71), seating_h),  # Dead Centre
+                    (int(w * 0.42),  0, int(w * 0.86), seating_h),  # Centre-Right
+                    (int(w * 0.58),  0, w,              seating_h),  # Far Right
                 ]
-                self.detector.setScoreThreshold(0.32)
+                self.detector.setScoreThreshold(0.26)  # relaxed for small 4K faces
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -141,8 +156,7 @@ class VisionEngine:
                     th = sy2 - sy1
                     if tw < 40 or th < 40:
                         continue
-                    # Scale factor bounded so target tile width <= 1280px to guarantee light memory
-                    tile_scale = min(2.0, 1280.0 / max(tw, 1))
+                    tile_scale = min(2.5, 1920.0 / max(tw, 1))
                     target_tw = int(tw * tile_scale)
                     target_th = int(th * tile_scale)
                     zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=cv2.INTER_LANCZOS4)
@@ -160,22 +174,26 @@ class VisionEngine:
                                 f_mapped[lm + 1] = (f[lm + 1] / tile_scale) + sy1
                             all_detected_faces.append(f_mapped)
 
-                # Pass 3: Regional Far-Bench & Last-Row Super-Resolution Zoom (3 Regional Sectors)
-                # Targets distant back-row seating with 2.4x Lanczos zoom + CLAHE contrast boost
-                far_h = int(seating_h * 0.55)
+                # -------------------------------------------------------------------
+                # PASS 3 - Back-Row Far-Bench Band (top 52% of seating height)
+                # 5 overlapping sectors + CLAHE + 3.5x Lanczos zoom
+                # -------------------------------------------------------------------
+                far_h = int(seating_h * 0.52)
                 if far_h > 40:
                     far_sectors = [
-                        (0, 0, int(w * 0.48), far_h),               # Far Left Wing
-                        (int(w * 0.26), 0, int(w * 0.74), far_h),   # Far Center Row
-                        (int(w * 0.52), 0, w, far_h)                # Far Right Wing
+                        (0,             0, int(w * 0.40), far_h),   # Far-Left back
+                        (int(w * 0.15), 0, int(w * 0.55), far_h),  # Centre-Left back
+                        (int(w * 0.30), 0, int(w * 0.70), far_h),  # Centre back
+                        (int(w * 0.45), 0, int(w * 0.85), far_h),  # Centre-Right back
+                        (int(w * 0.60), 0, w,              far_h),  # Far-Right back
                     ]
-                    self.detector.setScoreThreshold(0.28)
+                    self.detector.setScoreThreshold(0.22)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1
                         if fw < 30 or fh < 30:
                             continue
-                        scale_far = min(2.4, 1280.0 / max(fw, 1))
+                        scale_far = min(3.5, 1920.0 / max(fw, 1))
                         target_fw = int(fw * scale_far)
                         target_fh = int(fh * scale_far)
                         clahe_far = self.enhance_contrast(far_crop)
@@ -194,7 +212,50 @@ class VisionEngine:
                                     f_mapped[lm + 1] = (f[lm + 1] / scale_far) + fy1
                                 all_detected_faces.append(f_mapped)
 
-            # Reset detector input size to release OpenCV C++ intermediate buffers and restore threshold
+                # -------------------------------------------------------------------
+                # PASS 4 - Ultra Back-Row 6x Zoom (top 32% - 4K smartboard specific)
+                # Last 2-3 rows may have faces as small as 10-18px on a 4K sensor.
+                # Extreme zoom + strong CLAHE recovers minimal facial landmarks.
+                # -------------------------------------------------------------------
+                ultra_h = int(seating_h * 0.32)
+                if ultra_h > 30:
+                    ultra_sectors = [
+                        (0,             0, int(w * 0.36), ultra_h),
+                        (int(w * 0.18), 0, int(w * 0.54), ultra_h),
+                        (int(w * 0.32), 0, int(w * 0.68), ultra_h),
+                        (int(w * 0.46), 0, int(w * 0.82), ultra_h),
+                        (int(w * 0.64), 0, w,              ultra_h),
+                    ]
+                    self.detector.setScoreThreshold(0.18)
+                    for ux1, uy1, ux2, uy2 in ultra_sectors:
+                        u_crop = img_bgr[uy1:uy2, ux1:ux2]
+                        uw, uh = ux2 - ux1, uy2 - uy1
+                        if uw < 20 or uh < 20:
+                            continue
+                        scale_ultra = min(6.0, 1920.0 / max(uw, 1))
+                        target_uw = min(int(uw * scale_ultra), 1920)
+                        target_uh = min(int(uh * scale_ultra), 1920)
+                        clahe_ultra = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+                        lab = cv2.cvtColor(u_crop, cv2.COLOR_BGR2LAB)
+                        l_c, a_c, b_c = cv2.split(lab)
+                        l_c = clahe_ultra.apply(l_c)
+                        u_enh = cv2.cvtColor(cv2.merge((l_c, a_c, b_c)), cv2.COLOR_LAB2BGR)
+                        zoomed_ultra = cv2.resize(u_enh, (target_uw, target_uh), interpolation=cv2.INTER_LANCZOS4)
+                        self.detector.setInputSize((target_uw, target_uh))
+                        _, ultra_faces = self.detector.detect(zoomed_ultra)
+                        if ultra_faces is not None and len(ultra_faces) > 0:
+                            for f in ultra_faces:
+                                f_mapped = f.copy()
+                                f_mapped[0] = (f[0] / scale_ultra) + ux1
+                                f_mapped[1] = (f[1] / scale_ultra) + uy1
+                                f_mapped[2] = f[2] / scale_ultra
+                                f_mapped[3] = f[3] / scale_ultra
+                                for lm in range(4, 14, 2):
+                                    f_mapped[lm] = (f[lm] / scale_ultra) + ux1
+                                    f_mapped[lm + 1] = (f[lm + 1] / scale_ultra) + uy1
+                                all_detected_faces.append(f_mapped)
+
+            # Reset detector to release intermediate buffers
             self.detector.setInputSize((320, 320))
             self.detector.setScoreThreshold(HIGH_DENSITY_SCORE_THRESHOLD)
 
@@ -213,9 +274,9 @@ class VisionEngine:
                     f[lm] *= inv
                     f[lm + 1] *= inv
 
-        # Filter out tiny noise artifacts (< 8px)
-        valid_faces = [f for f in all_detected_faces if f[2] >= 8 and f[3] >= 8]
-        return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.38)
+        # 4K: faces in back rows can be as small as 5px after rescale mapping
+        valid_faces = [f for f in all_detected_faces if f[2] >= 5 and f[3] >= 5]
+        return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.35)
 
     def _suppress_duplicate_faces(self, face_list, iou_threshold=0.38, iom_threshold=0.50):
         if face_list is None:
@@ -553,11 +614,13 @@ class VisionEngine:
             pass
         return 0.0
 
-    def select_focal_keyframes(self, base64_frames: list, max_keyframes: int = 4):
+    def select_focal_keyframes(self, base64_frames: list, max_keyframes: int = 10):
         """
-        Fast-decodes frame sequence and selects top keyframes representing distinct focal depth peaks.
-        Reduces AI evaluation latency significantly while maintaining full focal coverage and 100% accuracy.
-        Immediately purges non-keyframe buffers to prevent Render memory spikes.
+        Decodes and selects sharpest keyframes for each temporal bucket.
+        For 4K smartboard sessions the camera sweeps a wide classroom area —
+        10 keyframes provide full temporal and spatial coverage.
+        Frames wider than 2560px (4K) are preserved at 2560px to retain distant face detail.
+        All discarded frames are purged immediately to control memory usage.
         """
         import base64
         import gc
@@ -571,8 +634,9 @@ class VisionEngine:
                 img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 if img_bgr is not None:
                     ih, iw = img_bgr.shape[:2]
-                    if iw > 1920:
-                        img_bgr = cv2.resize(img_bgr, (1920, int(ih * 1920.0 / iw)), interpolation=cv2.INTER_AREA)
+                    # Preserve 4K detail up to 2560px (QHD); downscale anything larger
+                    if iw > 2560:
+                        img_bgr = cv2.resize(img_bgr, (2560, int(ih * 2560.0 / iw)), interpolation=cv2.INTER_AREA)
                     sharpness = self.check_blurriness(img_bgr)
                     decoded_frames.append((idx, img_bgr, sharpness))
             except Exception:
@@ -584,7 +648,7 @@ class VisionEngine:
         if len(decoded_frames) <= max_keyframes:
             return decoded_frames
 
-        # Partition video sweep into uniform temporal buckets and select peak sharpness per bucket
+        # Partition video sweep into uniform temporal buckets; pick sharpest frame per bucket
         bucket_size = len(decoded_frames) / float(max_keyframes)
         selected_keyframes = []
 
@@ -596,7 +660,7 @@ class VisionEngine:
                 best_in_bucket = max(bucket, key=lambda item: item[2])
                 selected_keyframes.append(best_in_bucket)
 
-        # Release all discarded frames immediately to protect Render 512MB RAM ceiling
+        # Release all discarded frames immediately to control memory
         del decoded_frames
         gc.collect()
 

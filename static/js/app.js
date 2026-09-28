@@ -1,3 +1,9 @@
+// Hardware Profile & Smartboard Optimization (Android 14 4K Board)
+const isSmartboardDevice = (/Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0));
+if (isSmartboardDevice) {
+  document.documentElement.classList.add('smartboard-device');
+}
+
 // Global Application State
 const state = {
   token: localStorage.getItem('access_token') || null,
@@ -95,7 +101,9 @@ function initAcademicParticles() {
   const container = document.getElementById('academicParticles');
   if (!container) return;
   container.innerHTML = '';
-  const particleCount = 16;
+  // Reduce to 6 particles on touch/Android smartboard to save GPU budget
+  const isTouchDevice = (navigator.maxTouchPoints > 0);
+  const particleCount = isTouchDevice ? 6 : 16;
   for (let i = 0; i < particleCount; i++) {
     const p = document.createElement('div');
     p.className = 'academic-node';
@@ -104,9 +112,9 @@ function initAcademicParticles() {
     p.style.height = `${size}px`;
     p.style.top = `${Math.random() * 94}vh`;
     p.style.left = `${Math.random() * 95}vw`;
-    p.style.animationDuration = `${Math.random() * 12 + 14}s`;
+    p.style.animationDuration = `${isTouchDevice ? (Math.random() * 10 + 30) : (Math.random() * 12 + 14)}s`;
     p.style.animationDelay = `${(Math.random() * 5).toFixed(1)}s`;
-    p.style.opacity = (Math.random() * 0.35 + 0.15).toFixed(2);
+    p.style.opacity = isTouchDevice ? '0.08' : (Math.random() * 0.35 + 0.15).toFixed(2);
     container.appendChild(p);
   }
 }
@@ -437,8 +445,9 @@ async function initWebcam() {
   const statusText = document.getElementById('cameraStatusText');
 
   try {
-    // STAGE 1: Request camera with manual focus constraints directly in getUserMedia
-    // This prevents autofocus from ever activating before the stream begins.
+    // STAGE 1: Request optimal classroom camera resolution (Full HD 1080p).
+    // On Android 14 4K smartboards, 1080p provides sharp face data across all rows
+    // while keeping GPU video decode buffers lightweight and preventing UI stutter.
     const cameraConstraints = {
       video: {
         width: { ideal: 1920, min: 1280 },
@@ -527,56 +536,51 @@ async function startSmartboardAttendance() {
   const video = document.getElementById('webcamVideo');
   const videoTrack = state.webcamStream ? state.webcamStream.getVideoTracks()[0] : null;
 
-  // STEP 1: FORCE CAMERA OUT OF AUTOFOCUS IMMEDIATELY
+  // STEP 1: FORCE CAMERA OUT OF AUTOFOCUS IMMEDIATELY (single shot — no polling watchdog)
+  // The 300ms watchdog was causing severe jank on Android smartboards.
+  // A single focus-lock call at the start is sufficient; the lock is maintained by hardware.
   if (videoTrack) {
     await assertCameraFocusLock(videoTrack);
-
-    // Continuous lock watchdog: prevents camera from exiting manual focus lock during entire scanning
-    if (state.focusLockWatchdog) clearInterval(state.focusLockWatchdog);
-    state.focusLockWatchdog = setInterval(() => {
-      if (state.isCapturing && videoTrack) {
-        assertCameraFocusLock(videoTrack);
-      }
-    }, 300);
   }
 
+  // Always capture at 1280x720 — downscales from the native 4K smartboard stream.
+  // This keeps the server payload <800KB while capturing from the sharpest possible source.
   const captureWidth = 1280;
   const captureHeight = 720;
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;
-  const ctx = canvas.getContext('2d');
+  // Use willReadFrequently for faster getImageData on Android GPU
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-  // STEP 2: Frame Auto-Lock & Sharpness Stabilization:
-  // If camera was hunting or adjusting, let focal motor settle into locked state
+  // STEP 2: Brief stabilization — let camera exposure and focus settle after lock
   if (state.webcamStream && video.readyState === 4) {
-    for (let settle = 0; settle < 3; settle++) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      computeFrameSharpness(ctx, canvas.width, canvas.height);
-      await new Promise(r => setTimeout(r, 70));
-    }
+    ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
+    await new Promise(r => setTimeout(r, 200));
   }
 
   statusText.innerText = '🔒 Auto-Lock Active (Autofocus Locked) — Capturing Rows...';
 
   const capturedFrames = [];
-  const captureDurationMs = 2000; // 2.0 seconds high-definition capture
-  const intervalMs = 250; // 8 keyframes across focal sweep
+  // Capture 8 frames across 2 seconds — select best 4 on server
+  const captureDurationMs = 2000;
+  const intervalMs = 250;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
     const elapsed = Date.now() - startTime;
 
-    if (state.webcamStream && video.readyState === 4) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.85));
+    if (state.webcamStream && video.readyState >= 2) {
+      // Draw full native resolution video scaled down to 1280x720
+      ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
     } else {
       ctx.fillStyle = '#1E293B';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, captureWidth, captureHeight);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.85));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
     }
 
     if (elapsed >= captureDurationMs) {

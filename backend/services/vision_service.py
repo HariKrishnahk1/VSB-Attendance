@@ -208,7 +208,7 @@ class VisionEngine:
         valid_faces = [f for f in all_detected_faces if f[2] >= 8 and f[3] >= 8]
         return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.38)
 
-    def _suppress_duplicate_faces(self, face_list, iou_threshold=0.38):
+    def _suppress_duplicate_faces(self, face_list, iou_threshold=0.38, iom_threshold=0.50):
         if face_list is None:
             return []
         if isinstance(face_list, np.ndarray):
@@ -227,14 +227,15 @@ class VisionEngine:
 
             remaining = []
             for other in sorted_faces:
-                iou = self._calc_iou(best[:4], other[:4])
-                if iou < iou_threshold:
+                iou, iom = self._calc_overlap(best[:4], other[:4])
+                # Suppress if standard IoU >= threshold OR if one box is substantially enclosed inside the other (IoM >= threshold)
+                if iou < iou_threshold and iom < iom_threshold:
                     remaining.append(other)
             sorted_faces = remaining
 
         return keep
 
-    def _calc_iou(self, box1, box2):
+    def _calc_overlap(self, box1, box2):
         x1, y1, w1, h1 = box1
         x2, y2, w2, h2 = box2
 
@@ -243,9 +244,23 @@ class VisionEngine:
         xi2 = min(x1 + w1, x2 + w2)
         yi2 = min(y1 + h1, y2 + h2)
 
-        inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
-        union_area = (w1 * h1) + (w2 * h2) - inter_area
-        return inter_area / union_area if union_area > 0 else 0.0
+        inter_w = max(0, xi2 - xi1)
+        inter_h = max(0, yi2 - yi1)
+        inter_area = float(inter_w * inter_h)
+        if inter_area <= 0:
+            return 0.0, 0.0
+
+        area1 = float(w1 * h1)
+        area2 = float(w2 * h2)
+        union_area = area1 + area2 - inter_area
+        iou = inter_area / union_area if union_area > 0 else 0.0
+        min_area = min(area1, area2)
+        iom = inter_area / min_area if min_area > 0 else 0.0
+        return iou, iom
+
+    def _calc_iou(self, box1, box2):
+        iou, _ = self._calc_overlap(box1, box2)
+        return iou
 
     def extract_embedding(self, img_bgr, face_data, use_tta: bool = True):
         """

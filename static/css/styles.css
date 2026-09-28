@@ -50,6 +50,83 @@ body {
   overflow-x: hidden;
 }
 
+/* ============================================================
+   ANDROID SMARTBOARD PERFORMANCE MODE
+   Disables GPU-heavy effects on touch/Android devices to prevent
+   rendering lag. 4K smartboards use the same GPU for UI + camera.
+   ============================================================ */
+@media (pointer: coarse) {
+  /* Replace backdrop-filter blur with opaque backgrounds — saves 60-120ms/frame on Android */
+  .navbar,
+  .modal-overlay,
+  .modal-card,
+  .role-pill,
+  .camera-status-pill,
+  .toast,
+  .glass-card,
+  .smartboard-card,
+  [class*="card"],
+  [style*="backdrop-filter"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Disable ambient glow blurs (filter: blur is extremely expensive on Android GPU) */
+  .ambient-glow {
+    display: none !important;
+  }
+
+  /* Disable academic particles on smartboard to preserve GPU rendering budget */
+  .academic-node {
+    display: none !important;
+  }
+
+  /* Disable logo float animation during capture */
+  .portal-logo img {
+    animation: none !important;
+  }
+
+  /* Enable hardware acceleration on video element for smooth playback */
+  #webcamVideo {
+    will-change: transform;
+    transform: translateZ(0);
+  }
+
+  /* Keep all critical transitions but simplify */
+  * {
+    transition-duration: 0.1s !important;
+  }
+}
+
+/* Explicit class-based performance mode for Android 14 Smartboards */
+.smartboard-device .navbar,
+.smartboard-device .modal-overlay,
+.smartboard-device .modal-card,
+.smartboard-device .role-pill,
+.smartboard-device .camera-status-pill,
+.smartboard-device .toast,
+.smartboard-device .glass-card,
+.smartboard-device .smartboard-card,
+.smartboard-device [class*="card"],
+.smartboard-device [style*="backdrop-filter"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.smartboard-device .ambient-glow,
+.smartboard-device .academic-node {
+  display: none !important;
+}
+
+.smartboard-device .portal-logo img {
+  animation: none !important;
+}
+
+.smartboard-device #webcamVideo {
+  will-change: transform;
+  transform: translateZ(0);
+}
+
 /* Dynamic Ambient Glow Effects */
 .ambient-glow {
   position: fixed;

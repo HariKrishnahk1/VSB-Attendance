@@ -17,6 +17,78 @@ from backend.models import (
 from backend.services.vision_service import get_vision_engine
 
 
+def _solve_bipartite_matching(cost_matrix):
+    """
+    Solves linear sum assignment (Hungarian matching).
+    First attempts scipy.optimize.linear_sum_assignment;
+    if scipy is not installed, gracefully falls back to a pure-NumPy Jonker-Volgenant implementation.
+    """
+    try:
+        from scipy.optimize import linear_sum_assignment
+        return linear_sum_assignment(cost_matrix)
+    except (ImportError, Exception):
+        pass
+
+    C = np.array(cost_matrix, dtype=float)
+    n_rows, n_cols = C.shape
+    transpose = n_rows > n_cols
+    if transpose:
+        C = C.T
+        n_rows, n_cols = C.shape
+
+    u = np.zeros(n_rows + 1)
+    v = np.zeros(n_cols + 1)
+    p = np.zeros(n_cols + 1, dtype=int)
+    way = np.zeros(n_cols + 1, dtype=int)
+
+    for i in range(1, n_rows + 1):
+        p[0] = i
+        j0 = 0
+        minv = np.full(n_cols + 1, np.inf)
+        used = np.zeros(n_cols + 1, dtype=bool)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = np.inf
+            j1 = 0
+            for j in range(1, n_cols + 1):
+                if not used[j]:
+                    cur = C[i0 - 1, j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            for j in range(n_cols + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+
+    row_ind = np.zeros(n_rows, dtype=int)
+    col_ind = np.zeros(n_rows, dtype=int)
+    for j in range(1, n_cols + 1):
+        if p[j] != 0 and p[j] <= n_rows:
+            row_ind[p[j] - 1] = p[j] - 1
+            col_ind[p[j] - 1] = j - 1
+
+    if transpose:
+        order = np.argsort(col_ind)
+        return col_ind[order], row_ind[order]
+    return row_ind, col_ind
+
+
 def process_smartboard_session(
     class_id: int,
     subject_id: int = None,
@@ -141,8 +213,7 @@ def process_smartboard_session(
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Solve Global Optimal Bipartite Matching (Maximum Weight Assignment)
-        from scipy.optimize import linear_sum_assignment
-        row_ind, col_ind = linear_sum_assignment(-sim_matrix)
+        row_ind, col_ind = _solve_bipartite_matching(-sim_matrix)
 
         candidates = []
         assigned_faces = set()

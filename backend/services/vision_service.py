@@ -106,17 +106,17 @@ class VisionEngine:
 
         orig_h, orig_w = img_bgr.shape[:2]
         rescale = 1.0
-        # Normalize input frames wider than 1280px to protect Render free-tier RAM (512MB cap)
-        if orig_w > 1280:
-            rescale = 1280.0 / orig_w
-            img_bgr = cv2.resize(img_bgr, (1280, int(orig_h * rescale)), interpolation=cv2.INTER_AREA)
+        # Normalize input frames wider than 1920px (Full HD) to protect Render RAM
+        if orig_w > 1920:
+            rescale = 1920.0 / orig_w
+            img_bgr = cv2.resize(img_bgr, (1920, int(orig_h * rescale)), interpolation=cv2.INTER_AREA)
 
         h, w, _ = img_bgr.shape
         all_detected_faces = []
 
         with self._model_lock:
-            # Pass 1: Full-Frame Detection
-            self.detector.setScoreThreshold(0.28 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD)
+            # Pass 1: Full-Frame Detection at native resolution (front & mid rows)
+            self.detector.setScoreThreshold(0.26 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
             if faces_main is not None and len(faces_main) > 0:
@@ -126,14 +126,14 @@ class VisionEngine:
             if is_classroom and h > 80 and w > 120:
                 seating_h = int(h * 0.90)
 
-                # Pass 2: 3-Sector Regional Classroom Tiling (Left, Center, Right)
-                # Overlapping sectors ensure students on row boundaries are never cut off
+                # Pass 2: 3-Sector Regional Classroom Seating Scan (Left, Center, Right)
+                # Overlapping sectors with Lanczos-4 zoom cleanly resolve middle and distant rows
                 sectors = [
                     (0, 0, int(w * 0.52), seating_h),               # Left Wing
                     (int(w * 0.24), 0, int(w * 0.76), seating_h),     # Center Rows
                     (int(w * 0.48), 0, w, seating_h)                 # Right Wing
                 ]
-                self.detector.setScoreThreshold(0.22)
+                self.detector.setScoreThreshold(0.20)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -141,11 +141,11 @@ class VisionEngine:
                     th = sy2 - sy1
                     if tw < 40 or th < 40:
                         continue
-                    # Scale factor bounded so max tile width <= 1000px to prevent C++ heap spikes
-                    tile_scale = min(1.6, 1000.0 / max(tw, 1))
+                    # Scale factor bounded so target tile width <= 1280px to guarantee light memory
+                    tile_scale = min(2.0, 1280.0 / max(tw, 1))
                     target_tw = int(tw * tile_scale)
                     target_th = int(th * tile_scale)
-                    zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=cv2.INTER_LINEAR)
+                    zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=cv2.INTER_LANCZOS4)
                     self.detector.setInputSize((target_tw, target_th))
                     _, t_faces = self.detector.detect(zoomed_tile)
                     if t_faces is not None and len(t_faces) > 0:
@@ -160,30 +160,39 @@ class VisionEngine:
                                 f_mapped[lm + 1] = (f[lm + 1] / tile_scale) + sy1
                             all_detected_faces.append(f_mapped)
 
-                # Pass 3: Back-Row Far-Bench Band Focus (top 50% seating plane)
-                far_h = int(seating_h * 0.50)
+                # Pass 3: Regional Far-Bench & Last-Row Super-Resolution Zoom (3 Regional Sectors)
+                # Targets distant back-row seating with 2.4x Lanczos zoom + CLAHE contrast boost
+                far_h = int(seating_h * 0.55)
                 if far_h > 40:
-                    far_roi = img_bgr[0:far_h, 0:w]
-                    clahe_far = self.enhance_contrast(far_roi)
-                    # Bounded scale so max dimension <= 1120px (prevents OpenCV DNN 300MB heap spike)
-                    far_scale = min(1.8, 1120.0 / max(w, 1))
-                    target_far_w = int(w * far_scale)
-                    target_far_h = int(far_h * far_scale)
-                    zoomed_far = cv2.resize(clahe_far, (target_far_w, target_far_h), interpolation=cv2.INTER_LINEAR)
-                    self.detector.setScoreThreshold(0.20)
-                    self.detector.setInputSize((target_far_w, target_far_h))
-                    _, far_faces = self.detector.detect(zoomed_far)
-                    if far_faces is not None and len(far_faces) > 0:
-                        for f in far_faces:
-                            f_mapped = f.copy()
-                            f_mapped[0] = f[0] / far_scale
-                            f_mapped[1] = f[1] / far_scale
-                            f_mapped[2] = f[2] / far_scale
-                            f_mapped[3] = f[3] / far_scale
-                            for lm in range(4, 14, 2):
-                                f_mapped[lm] = f[lm] / far_scale
-                                f_mapped[lm + 1] = f[lm + 1] / far_scale
-                            all_detected_faces.append(f_mapped)
+                    far_sectors = [
+                        (0, 0, int(w * 0.48), far_h),               # Far Left Wing
+                        (int(w * 0.26), 0, int(w * 0.74), far_h),   # Far Center Row
+                        (int(w * 0.52), 0, w, far_h)                # Far Right Wing
+                    ]
+                    self.detector.setScoreThreshold(0.18)
+                    for fx1, fy1, fx2, fy2 in far_sectors:
+                        far_crop = img_bgr[fy1:fy2, fx1:fx2]
+                        fw, fh = fx2 - fx1, fy2 - fy1
+                        if fw < 30 or fh < 30:
+                            continue
+                        scale_far = min(2.4, 1280.0 / max(fw, 1))
+                        target_fw = int(fw * scale_far)
+                        target_fh = int(fh * scale_far)
+                        clahe_far = self.enhance_contrast(far_crop)
+                        zoomed_far = cv2.resize(clahe_far, (target_fw, target_fh), interpolation=cv2.INTER_LANCZOS4)
+                        self.detector.setInputSize((target_fw, target_fh))
+                        _, far_faces = self.detector.detect(zoomed_far)
+                        if far_faces is not None and len(far_faces) > 0:
+                            for f in far_faces:
+                                f_mapped = f.copy()
+                                f_mapped[0] = (f[0] / scale_far) + fx1
+                                f_mapped[1] = (f[1] / scale_far) + fy1
+                                f_mapped[2] = f[2] / scale_far
+                                f_mapped[3] = f[3] / scale_far
+                                for lm in range(4, 14, 2):
+                                    f_mapped[lm] = (f[lm] / scale_far) + fx1
+                                    f_mapped[lm + 1] = (f[lm + 1] / scale_far) + fy1
+                                all_detected_faces.append(f_mapped)
 
             # Reset detector input size to release OpenCV C++ intermediate buffers and restore threshold
             self.detector.setInputSize((320, 320))
@@ -562,8 +571,8 @@ class VisionEngine:
                 img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 if img_bgr is not None:
                     ih, iw = img_bgr.shape[:2]
-                    if iw > 1280:
-                        img_bgr = cv2.resize(img_bgr, (1280, int(ih * 1280.0 / iw)), interpolation=cv2.INTER_AREA)
+                    if iw > 1920:
+                        img_bgr = cv2.resize(img_bgr, (1920, int(ih * 1920.0 / iw)), interpolation=cv2.INTER_AREA)
                     sharpness = self.check_blurriness(img_bgr)
                     decoded_frames.append((idx, img_bgr, sharpness))
             except Exception:

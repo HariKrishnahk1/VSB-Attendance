@@ -202,10 +202,11 @@ def process_smartboard_session(
                 if s_scores:
                     s_sorted = sorted(s_scores, reverse=True)
                     s_peak = s_sorted[0]
-                    # Use top-3 consensus: reduces false positives from lucky single-template matches
-                    s_top3_mean = sum(s_sorted[:3]) / float(min(3, len(s_sorted)))
-                    # Weighted composite: 65% peak (identity signal) + 35% multi-template consensus
-                    comp_score = 0.65 * s_peak + 0.35 * s_top3_mean
+                    # In a 12-template multi-condition biometric profile, peak cosine similarity
+                    # captures the best-matching invariant pose/lighting representation.
+                    # Blend 88% peak + 12% top-2 to maintain high discrimination power without score deflation.
+                    s_top2 = (s_sorted[0] + (s_sorted[1] if len(s_sorted) > 1 else s_sorted[0])) / 2.0
+                    comp_score = 0.88 * s_peak + 0.12 * s_top2
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Solve Global Optimal Bipartite Matching (Maximum Weight Assignment)
@@ -225,21 +226,20 @@ def process_smartboard_session(
             row_scores = sorted(sim_matrix[r, :], reverse=True)
             margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
 
-            # Adaptive Match Threshold — tuned for SFace cosine on classroom captures:
-            # - Far back-row faces (< 70px) compress features, matched at >= 0.22
-            # - Mid-row faces matched at >= 0.25
-            # - Front-row / close faces matched at >= 0.27
-            # Margin check prevents false positives when two students look similar
+            # Adaptive Match Thresholds tuned for SFace cosine on classroom captures:
+            # - Front row (>= 70px): High identity clarity, genuine match scores >= 0.60
+            # - Mid row (35-70px): Genuine match scores >= 0.45
+            # - Extreme back row (< 35px): Distant compressed features, genuine scores >= 0.28
             face_w, face_h = meta["face_box"][2], meta["face_box"][3]
             if face_w < 35 or face_h < 35:      # extreme back-row
-                min_match_thresh = 0.22
-                min_margin_thresh = 0.005 if match_score < 0.30 else 0.001
+                min_match_thresh = 0.26
+                min_margin_thresh = 0.008 if match_score < 0.35 else 0.001
             elif face_w < 70 or face_h < 70:    # mid-back row
-                min_match_thresh = 0.24
-                min_margin_thresh = 0.008 if match_score < 0.32 else 0.002
+                min_match_thresh = 0.30
+                min_margin_thresh = 0.012 if match_score < 0.40 else 0.002
             else:                                # front/mid row
-                min_match_thresh = 0.27
-                min_margin_thresh = 0.012 if match_score < 0.35 else 0.003
+                min_match_thresh = 0.35
+                min_margin_thresh = 0.015 if match_score < 0.48 else 0.003
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
             candidates.append({
@@ -303,11 +303,11 @@ def process_smartboard_session(
             # Use the same adaptive threshold as the per-face worker (by face pixel size)
             face_w_ev = box[2] if box else 100
             if face_w_ev < 35:
-                ev_thresh = 0.22
+                ev_thresh = 0.26
             elif face_w_ev < 70:
-                ev_thresh = 0.24
+                ev_thresh = 0.30
             else:
-                ev_thresh = 0.27
+                ev_thresh = 0.35
 
             if st_id and st_id not in assigned_students_this_frame and score >= ev_thresh:
                 assigned_students_this_frame.add(st_id)
@@ -373,29 +373,28 @@ def process_smartboard_session(
 
         # ACCURATE ATTENDANCE DETERMINATION:
         # Every student visible in the camera is uniquely matched via optimal Hungarian assignment.
-        # Multi-frame consensus provides extra confirmation for borderline cases.
-        #
         # Threshold ladder (SFace cosine):
-        #   >= 0.27 front row strong match            -> PRESENT (1 frame sufficient)
-        #   >= 0.24 back-row / mid-row match          -> PRESENT (1 frame sufficient)
-        #   >= 0.22 extreme back-row (< 35px)         -> PRESENT (1 frame sufficient)
-        #   >= 0.22 borderline with 2+ frame hits     -> PRESENT (consensus confirms)
-        #   >= 0.20 with 3+ frame hits                -> PRESENT (high-frequency consensus)
-        #   >= 0.20                                   -> REVIEW  (one frame only)
-        #   < 0.20                                    -> ABSENT
+        #   >= 0.35 front/mid row match               -> PRESENT (1 frame sufficient)
+        #   >= 0.30 mid-back row match                -> PRESENT (1 frame sufficient)
+        #   >= 0.28 extreme back-row (< 35px)         -> PRESENT (1 frame sufficient)
+        #   >= 0.26 back-row with 2+ frame hits       -> PRESENT (consensus confirms)
+        #   >= 0.25 with 3+ frame hits                -> PRESENT (high-frequency consensus)
+        #   >= 0.24                                   -> REVIEW  (single frame candidate)
+        #   < 0.24                                    -> ABSENT
         is_present = (
-            (max_score >= 0.27) or
-            (max_score >= 0.24 and (not is_distant or frame_hits >= 1)) or
-            (is_distant and max_score >= 0.22) or
-            (max_score >= 0.22 and frame_hits >= 2) or
-            (max_score >= 0.20 and frame_hits >= 3)
+            (max_score >= 0.35 and not is_distant) or
+            (max_score >= 0.30 and not is_distant) or
+            (is_distant and max_score >= 0.28) or
+            (max_score >= 0.28 and frame_hits >= 2) or
+            (is_distant and max_score >= 0.26 and frame_hits >= 2) or
+            (max_score >= 0.25 and frame_hits >= 3)
         )
 
         if is_present:
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
             # Online Embedding Auto-Enrichment (Continuous Biometric Enhancement)
-            if ev.get("best_emb") is not None and max_score >= 0.40:
+            if ev.get("best_emb") is not None and max_score >= 0.45:
                 try:
                     curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
                         StudentFaceEmbedding.student_id == student.id
@@ -409,7 +408,7 @@ def process_smartboard_session(
                         db_session.add(enrich_rec)
                 except Exception as ex:
                     print(f"[Auto-Enrich] Model enrichment skipped: {ex}")
-        elif max_score >= 0.20:
+        elif max_score >= 0.24:
             status = AttendanceStatus.REVIEW.value
             pending_cnt += 1
             review_entry = AttendanceReview(

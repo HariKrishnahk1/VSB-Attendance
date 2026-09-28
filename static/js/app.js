@@ -543,10 +543,9 @@ async function startSmartboardAttendance() {
     await assertCameraFocusLock(videoTrack);
   }
 
-  // Always capture at 1280x720 — downscales from the native 4K smartboard stream.
-  // This keeps the server payload <800KB while capturing from the sharpest possible source.
-  const captureWidth = 1280;
-  const captureHeight = 720;
+  // Capture at Full HD (up to 1920x1080) for maximum facial pixel fidelity across all rows
+  const captureWidth = (video.videoWidth && video.videoWidth >= 1280) ? Math.min(1920, video.videoWidth) : 1920;
+  const captureHeight = (video.videoHeight && video.videoHeight >= 720) ? Math.min(1080, video.videoHeight) : 1080;
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;
@@ -562,25 +561,24 @@ async function startSmartboardAttendance() {
   statusText.innerText = '🔒 Auto-Lock Active (Autofocus Locked) — Capturing Rows...';
 
   const capturedFrames = [];
-  // Capture 8 frames across 2 seconds — select best 4 on server
+  // Capture 6 Full-HD keyframes across 2 seconds — select best 4 on server
   const captureDurationMs = 2000;
-  const intervalMs = 250;
+  const intervalMs = 330;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
     const elapsed = Date.now() - startTime;
 
     if (state.webcamStream && video.readyState >= 2) {
-      // Draw full native resolution video scaled down to 1280x720
       ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.92));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, captureWidth, captureHeight);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.92));
     }
 
     if (elapsed >= captureDurationMs) {

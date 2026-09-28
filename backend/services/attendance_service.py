@@ -139,7 +139,8 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=4)
+    # Use 6 keyframes (was 4) to get better temporal coverage across the video
+    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=6)
     if not selected_keyframes:
         selected_keyframes = []
 
@@ -201,12 +202,12 @@ def process_smartboard_session(
                 s_scores = [scores_array[idx] for idx, sid in enumerate(student_ids) if sid == s_id]
                 if s_scores:
                     s_sorted = sorted(s_scores, reverse=True)
-                    s_peak = s_sorted[0]
-                    # In a 12-template multi-condition biometric profile, peak cosine similarity
-                    # captures the best-matching invariant pose/lighting representation.
-                    # Blend 88% peak + 12% top-2 to maintain high discrimination power without score deflation.
-                    s_top2 = (s_sorted[0] + (s_sorted[1] if len(s_sorted) > 1 else s_sorted[0])) / 2.0
-                    comp_score = 0.88 * s_peak + 0.12 * s_top2
+                    # Weighted combination: 70% top-1, 20% top-2, 10% top-3
+                    # This is much more robust than peak-only and avoids lucky single-template spikes
+                    t1 = s_sorted[0]
+                    t2 = s_sorted[1] if len(s_sorted) > 1 else t1
+                    t3 = s_sorted[2] if len(s_sorted) > 2 else t2
+                    comp_score = 0.70 * t1 + 0.20 * t2 + 0.10 * t3
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Solve Global Optimal Bipartite Matching (Maximum Weight Assignment)
@@ -226,20 +227,20 @@ def process_smartboard_session(
             row_scores = sorted(sim_matrix[r, :], reverse=True)
             margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
 
-            # Adaptive Match Thresholds tuned for SFace cosine on classroom captures:
-            # - Front row (>= 70px): High identity clarity, genuine match scores >= 0.60
-            # - Mid row (35-70px): Genuine match scores >= 0.45
-            # - Extreme back row (< 35px): Distant compressed features, genuine scores >= 0.28
-            face_w, face_h = meta["face_box"][2], meta["face_box"][3]
-            if face_w < 35 or face_h < 35:      # extreme back-row
-                min_match_thresh = 0.26
-                min_margin_thresh = 0.008 if match_score < 0.35 else 0.001
+            # Strict adaptive thresholds based on SFace cosine operating points:
+            # Face pixel size determines expected cosine degradation from distance.
+            # These thresholds are higher than before to eliminate false positives.
+            face_w, face_h = face_meta[r]["face_box"][2], face_meta[r]["face_box"][3]
+            if face_w < 35 or face_h < 35:      # extreme back-row (very small face)
+                min_match_thresh = 0.36
+                min_margin_thresh = 0.020
             elif face_w < 70 or face_h < 70:    # mid-back row
-                min_match_thresh = 0.30
-                min_margin_thresh = 0.012 if match_score < 0.40 else 0.002
-            else:                                # front/mid row
-                min_match_thresh = 0.35
-                min_margin_thresh = 0.015 if match_score < 0.48 else 0.003
+                min_match_thresh = 0.42
+                min_margin_thresh = 0.025
+            else:                                # front/mid row (clear face)
+                min_match_thresh = 0.48
+                min_margin_thresh = 0.030
+
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
             candidates.append({
@@ -300,14 +301,14 @@ def process_smartboard_session(
 
             calibrated_pct = vision.calibrate_confidence_score(score) if score > 0 else 0.0
 
-            # Use the same adaptive threshold as the per-face worker (by face pixel size)
+            # Strict threshold check with same per-size thresholds as the worker
             face_w_ev = box[2] if box else 100
             if face_w_ev < 35:
-                ev_thresh = 0.26
+                ev_thresh = 0.36
             elif face_w_ev < 70:
-                ev_thresh = 0.30
+                ev_thresh = 0.42
             else:
-                ev_thresh = 0.35
+                ev_thresh = 0.48
 
             if st_id and st_id not in assigned_students_this_frame and score >= ev_thresh:
                 assigned_students_this_frame.add(st_id)
@@ -371,30 +372,37 @@ def process_smartboard_session(
 
         is_distant = ev.get("is_distant", False)
 
-        # ACCURATE ATTENDANCE DETERMINATION:
-        # Every student visible in the camera is uniquely matched via optimal Hungarian assignment.
-        # Threshold ladder (SFace cosine):
-        #   >= 0.35 front/mid row match               -> PRESENT (1 frame sufficient)
-        #   >= 0.30 mid-back row match                -> PRESENT (1 frame sufficient)
-        #   >= 0.28 extreme back-row (< 35px)         -> PRESENT (1 frame sufficient)
-        #   >= 0.26 back-row with 2+ frame hits       -> PRESENT (consensus confirms)
-        #   >= 0.25 with 3+ frame hits                -> PRESENT (high-frequency consensus)
-        #   >= 0.24                                   -> REVIEW  (single frame candidate)
-        #   < 0.24                                    -> ABSENT
+        # -----------------------------------------------------------------------
+        # ATTENDANCE DECISION LADDER (SFace cosine, calibrated thresholds)
+        # -----------------------------------------------------------------------
+        # Tier 1 – HIGH CONFIDENCE (front/mid row, score >= 0.50, any frame count)
+        #          -> PRESENT immediately
+        # Tier 2 – MEDIUM CONFIDENCE (score >= 0.42, 2+ frame hits)
+        #          -> PRESENT (multi-frame consensus confirms identity)
+        # Tier 3 – DISTANT / BACK-ROW (face < 70px, score >= 0.38, 2+ hits)
+        #          -> PRESENT (degraded image, consensus required)
+        # Tier 4 – BORDERLINE (score >= 0.34, 3+ hits)
+        #          -> REVIEW (flag for staff confirmation)
+        # Tier 5 – LOW / NO MATCH (score < 0.34 or only 1 weak hit)
+        #          -> ABSENT
+        # -----------------------------------------------------------------------
         is_present = (
-            (max_score >= 0.35 and not is_distant) or
-            (max_score >= 0.30 and not is_distant) or
-            (is_distant and max_score >= 0.28) or
-            (max_score >= 0.28 and frame_hits >= 2) or
-            (is_distant and max_score >= 0.26 and frame_hits >= 2) or
-            (max_score >= 0.25 and frame_hits >= 3)
+            (max_score >= 0.50 and frame_hits >= 1) or                          # Tier 1
+            (max_score >= 0.42 and frame_hits >= 2) or                          # Tier 2
+            (is_distant and max_score >= 0.38 and frame_hits >= 2) or           # Tier 3
+            (max_score >= 0.40 and frame_hits >= 3)                             # Tier 2b (3-frame lower score)
+        )
+        is_review = (
+            not is_present and
+            max_score >= 0.34 and
+            frame_hits >= 2
         )
 
         if is_present:
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
-            # Online Embedding Auto-Enrichment (Continuous Biometric Enhancement)
-            if ev.get("best_emb") is not None and max_score >= 0.45:
+            # Online Embedding Auto-Enrichment only when score is very high (genuine match only)
+            if ev.get("best_emb") is not None and max_score >= 0.52:
                 try:
                     curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
                         StudentFaceEmbedding.student_id == student.id
@@ -408,7 +416,7 @@ def process_smartboard_session(
                         db_session.add(enrich_rec)
                 except Exception as ex:
                     print(f"[Auto-Enrich] Model enrichment skipped: {ex}")
-        elif max_score >= 0.24:
+        elif is_review:
             status = AttendanceStatus.REVIEW.value
             pending_cnt += 1
             review_entry = AttendanceReview(

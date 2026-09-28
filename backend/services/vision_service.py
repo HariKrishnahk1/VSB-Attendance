@@ -17,8 +17,8 @@ from backend.config import (
 YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 SFACE_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
 
-# High-Precision Classroom Face Detection Parameters (eliminates false background detections)
-HIGH_DENSITY_SCORE_THRESHOLD = YUNET_SCORE_THRESHOLD  # 0.55
+# High-Precision Classroom Face Detection Parameters
+HIGH_DENSITY_SCORE_THRESHOLD = YUNET_SCORE_THRESHOLD  # 0.40 (raised from 0.30)
 MAX_CLASSROOM_DETECTIONS = 5000
 
 
@@ -115,8 +115,8 @@ class VisionEngine:
         all_detected_faces = []
 
         with self._model_lock:
-            # Pass 1: Full-Frame Detection at native resolution (front & mid rows)
-            self.detector.setScoreThreshold(0.26 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD)
+            # Pass 1: Full-Frame Detection at native resolution
+            self.detector.setScoreThreshold(0.38 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
             if faces_main is not None and len(faces_main) > 0:
@@ -133,7 +133,7 @@ class VisionEngine:
                     (int(w * 0.24), 0, int(w * 0.76), seating_h),     # Center Rows
                     (int(w * 0.48), 0, w, seating_h)                 # Right Wing
                 ]
-                self.detector.setScoreThreshold(0.20)
+                self.detector.setScoreThreshold(0.32)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -169,7 +169,7 @@ class VisionEngine:
                         (int(w * 0.26), 0, int(w * 0.74), far_h),   # Far Center Row
                         (int(w * 0.52), 0, w, far_h)                # Far Right Wing
                     ]
-                    self.detector.setScoreThreshold(0.18)
+                    self.detector.setScoreThreshold(0.28)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1

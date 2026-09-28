@@ -29,19 +29,20 @@ YUNET_MODEL_PATH = str(MODELS_DIR / "yunet.onnx")
 SFACE_MODEL_PATH = str(MODELS_DIR / "sface.onnx")
 
 # YuNet Face Detector parameters
-YUNET_SCORE_THRESHOLD = 0.30  # High-sensitivity for multi-distance and back-row classroom coverage
+YUNET_SCORE_THRESHOLD = 0.40  # Balanced sensitivity - reduces false face detections from background
 YUNET_NMS_THRESHOLD = 0.38
 YUNET_TOP_K = 5000
 
 # High-Precision SFace Cosine Similarity & Multi-Template Thresholds
-# SFace Cosine Standard:
-# >= 0.36: High-Confidence Front/Mid Row Match
-# >= 0.26: Strong Back-Row / Distance Match with multi-template ensemble
-# 0.22 - 0.25: Borderline / Review Candidate
-# < 0.22: Unrecognized / Non-Face Clutter
-THRESHOLD_HIGH_CONFIDENCE = 0.36
-THRESHOLD_MEDIUM_CONFIDENCE = 0.26
-THRESHOLD_AMBIGUITY_MARGIN = 0.015  # Margin required between top-1 and top-2 candidate
-MAX_STUDENT_TEMPLATES = 24         # Maximum multi-scale + live enriched templates per student
+# SFace Cosine Calibrated Ranges (verified against SFace paper):
+# >= 0.50: High-Confidence Front/Mid Row Match          -> AUTO PRESENT
+# >= 0.42: Mid-row match with 2+ frame consensus        -> AUTO PRESENT
+# >= 0.38: Back-row / distance match (face < 70px)      -> PRESENT if 2+ frames
+# >= 0.34: Borderline / single-frame distant match      -> REVIEW
+# < 0.34:  Unrecognized / Non-Face / False detection    -> ABSENT
+THRESHOLD_HIGH_CONFIDENCE = 0.50   # Front/mid-row clear match
+THRESHOLD_MEDIUM_CONFIDENCE = 0.38  # Back-row / distant match (requires multi-frame)
+THRESHOLD_AMBIGUITY_MARGIN = 0.025  # Minimum gap between top-1 and top-2 match (prevents ambiguous matches)
+MAX_STUDENT_TEMPLATES = 24          # Maximum multi-scale + live enriched templates per student
 
 

@@ -8,6 +8,7 @@ from backend.models import (
 )
 from backend.schemas import FrameProcessRequest, AttendanceConfirmRequest, RecordUpdateRequest
 from backend.services.auth_service import get_current_user, require_roles
+from typing import Optional
 from backend.services.attendance_service import process_smartboard_session, confirm_staff_reviews
 from backend.services.excel_service import generate_attendance_excel
 from backend.config import EXCEL_OUTPUT_DIR

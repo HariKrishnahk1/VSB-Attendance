@@ -25,16 +25,21 @@ def process_frames(
     if not req.frames or len(req.frames) == 0:
         raise HTTPException(status_code=400, detail="No webcam frames received.")
 
+    # Guard against excessively huge payloads
+    frames_to_process = req.frames[:16] if len(req.frames) > 16 else req.frames
+
     try:
         res = process_smartboard_session(
             class_id=req.class_id,
             subject_id=req.subject_id,
             taken_by_user_id=user.id,
-            base64_frames=req.frames,
+            base64_frames=frames_to_process,
             db_session=db
         )
         return res
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

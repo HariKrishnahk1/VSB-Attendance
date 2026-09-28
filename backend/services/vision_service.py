@@ -22,16 +22,21 @@ HIGH_DENSITY_SCORE_THRESHOLD = YUNET_SCORE_THRESHOLD  # 0.40 (raised from 0.30)
 MAX_CLASSROOM_DETECTIONS = 5000
 
 # --------------------------------------------------------------------------
-# Environment-aware memory limits
-# Render free tier: 512MB RAM -> conservative limits
-# Local / Smartboard (8GB): use full 4K pipeline
-# Set IS_RENDER=true in Render environment variables to activate safe mode.
+# Environment-aware memory & CPU limits
+# Render free tier: 512MB RAM, shared 0.1 vCPU -> strict conservative limits
+# Local / Smartboard (8GB+ RAM): full 4K high-density pipeline
+# Render sets RENDER=true, RENDER_SERVICE_ID, etc. automatically.
 # --------------------------------------------------------------------------
-_IS_RENDER = os.environ.get("IS_RENDER", "").lower() in ("1", "true", "yes")
-MAX_FRAME_WIDTH  = 1280 if _IS_RENDER else 2560   # px: cap frame before inference
-MAX_KEYFRAMES    = 4    if _IS_RENDER else 10      # keyframes per session
-ENABLE_PASS4     = not _IS_RENDER                  # ultra 6x zoom (only on local/smartboard)
-print(f"[VisionEngine] Environment: {'Render (memory-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
+_IS_RENDER = (
+    os.environ.get("RENDER", "").lower() in ("1", "true", "yes") or
+    os.environ.get("IS_RENDER", "").lower() in ("1", "true", "yes") or
+    os.environ.get("RENDER_SERVICE_ID") is not None or
+    os.environ.get("RENDER_INSTANCE_ID") is not None
+)
+MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 960 if _IS_RENDER else 2560))
+MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 2 if _IS_RENDER else 8))
+ENABLE_PASS4     = (not _IS_RENDER) and (os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes"))
+print(f"[VisionEngine] Environment: {'Render Cloud (memory/CPU-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
 print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
 
 
@@ -150,18 +155,31 @@ class VisionEngine:
                 seating_h = int(h * 0.92)  # capture more of top seating rows
 
                 # -------------------------------------------------------------------
-                # PASS 2 - 5-Sector Overlapping Mid-Distance Seating Scan
-                # 5 overlapping strips cover full classroom width.
-                # Tile zoom cap raised to 1920px (from 1280) for 4K sensors.
+                # PASS 2 - Mid-Distance Seating Scan
+                # Render: 2 wide overlapping sectors with fast INTER_LINEAR
+                # Local / Smartboard: 5 overlapping sectors with high-precision zoom
                 # -------------------------------------------------------------------
-                sectors = [
-                    (0,              0, int(w * 0.42), seating_h),   # Far Left
-                    (int(w * 0.14),  0, int(w * 0.58), seating_h),  # Centre-Left
-                    (int(w * 0.29),  0, int(w * 0.71), seating_h),  # Dead Centre
-                    (int(w * 0.42),  0, int(w * 0.86), seating_h),  # Centre-Right
-                    (int(w * 0.58),  0, w,              seating_h),  # Far Right
-                ]
-                self.detector.setScoreThreshold(0.26)  # relaxed for small 4K faces
+                if _IS_RENDER:
+                    sectors = [
+                        (0,              0, int(w * 0.60), seating_h),  # Left 60%
+                        (int(w * 0.40),  0, w,              seating_h),  # Right 60%
+                    ]
+                    max_tile_dim = 960.0
+                    interp_p2 = cv2.INTER_LINEAR
+                    p2_scale_cap = 1.8
+                else:
+                    sectors = [
+                        (0,              0, int(w * 0.42), seating_h),   # Far Left
+                        (int(w * 0.14),  0, int(w * 0.58), seating_h),  # Centre-Left
+                        (int(w * 0.29),  0, int(w * 0.71), seating_h),  # Dead Centre
+                        (int(w * 0.42),  0, int(w * 0.86), seating_h),  # Centre-Right
+                        (int(w * 0.58),  0, w,              seating_h),  # Far Right
+                    ]
+                    max_tile_dim = 1920.0
+                    interp_p2 = cv2.INTER_LANCZOS4
+                    p2_scale_cap = 2.5
+
+                self.detector.setScoreThreshold(0.26)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -169,10 +187,10 @@ class VisionEngine:
                     th = sy2 - sy1
                     if tw < 40 or th < 40:
                         continue
-                    tile_scale = min(2.5, 1920.0 / max(tw, 1))
+                    tile_scale = min(p2_scale_cap, max_tile_dim / max(tw, 1))
                     target_tw = int(tw * tile_scale)
                     target_th = int(th * tile_scale)
-                    zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=cv2.INTER_LANCZOS4)
+                    zoomed_tile = cv2.resize(tile_crop, (target_tw, target_th), interpolation=interp_p2)
                     self.detector.setInputSize((target_tw, target_th))
                     _, t_faces = self.detector.detect(zoomed_tile)
                     if t_faces is not None and len(t_faces) > 0:
@@ -189,28 +207,39 @@ class VisionEngine:
 
                 # -------------------------------------------------------------------
                 # PASS 3 - Back-Row Far-Bench Band (top 52% of seating height)
-                # 5 overlapping sectors + CLAHE + 3.5x Lanczos zoom
+                # Render: 1 continuous top-band scan
+                # Local / Smartboard: 5 sectors with CLAHE + 3.5x Lanczos zoom
                 # -------------------------------------------------------------------
                 far_h = int(seating_h * 0.52)
                 if far_h > 40:
-                    far_sectors = [
-                        (0,             0, int(w * 0.40), far_h),   # Far-Left back
-                        (int(w * 0.15), 0, int(w * 0.55), far_h),  # Centre-Left back
-                        (int(w * 0.30), 0, int(w * 0.70), far_h),  # Centre back
-                        (int(w * 0.45), 0, int(w * 0.85), far_h),  # Centre-Right back
-                        (int(w * 0.60), 0, w,              far_h),  # Far-Right back
-                    ]
+                    if _IS_RENDER:
+                        far_sectors = [(0, 0, w, far_h)]
+                        max_far_dim = 960.0
+                        interp_p3 = cv2.INTER_LINEAR
+                        p3_scale_cap = 1.8
+                    else:
+                        far_sectors = [
+                            (0,             0, int(w * 0.40), far_h),   # Far-Left back
+                            (int(w * 0.15), 0, int(w * 0.55), far_h),  # Centre-Left back
+                            (int(w * 0.30), 0, int(w * 0.70), far_h),  # Centre back
+                            (int(w * 0.45), 0, int(w * 0.85), far_h),  # Centre-Right back
+                            (int(w * 0.60), 0, w,              far_h),  # Far-Right back
+                        ]
+                        max_far_dim = 1920.0
+                        interp_p3 = cv2.INTER_LANCZOS4
+                        p3_scale_cap = 3.5
+
                     self.detector.setScoreThreshold(0.22)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1
                         if fw < 30 or fh < 30:
                             continue
-                        scale_far = min(3.5, 1920.0 / max(fw, 1))
+                        scale_far = min(p3_scale_cap, max_far_dim / max(fw, 1))
                         target_fw = int(fw * scale_far)
                         target_fh = int(fh * scale_far)
                         clahe_far = self.enhance_contrast(far_crop)
-                        zoomed_far = cv2.resize(clahe_far, (target_fw, target_fh), interpolation=cv2.INTER_LANCZOS4)
+                        zoomed_far = cv2.resize(clahe_far, (target_fw, target_fh), interpolation=interp_p3)
                         self.detector.setInputSize((target_fw, target_fh))
                         _, far_faces = self.detector.detect(zoomed_far)
                         if far_faces is not None and len(far_faces) > 0:
@@ -247,11 +276,7 @@ class VisionEngine:
                         scale_ultra = min(6.0, 1920.0 / max(uw, 1))
                         target_uw = min(int(uw * scale_ultra), 1920)
                         target_uh = min(int(uh * scale_ultra), 1920)
-                        clahe_ultra = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
-                        lab = cv2.cvtColor(u_crop, cv2.COLOR_BGR2LAB)
-                        l_c, a_c, b_c = cv2.split(lab)
-                        l_c = clahe_ultra.apply(l_c)
-                        u_enh = cv2.cvtColor(cv2.merge((l_c, a_c, b_c)), cv2.COLOR_LAB2BGR)
+                        u_enh = self.enhance_contrast(u_crop)
                         zoomed_ultra = cv2.resize(u_enh, (target_uw, target_uh), interpolation=cv2.INTER_LANCZOS4)
                         self.detector.setInputSize((target_uw, target_uh))
                         _, ultra_faces = self.detector.detect(zoomed_ultra)
@@ -393,7 +418,7 @@ class VisionEngine:
             fused = 0.60 * feat_flat + 0.40 * feat_flip
 
             # Distance adaptation: If face is small (far-distance classroom seating), sharpen landmarks
-            if bw < 55 or bh < 55:
+            if not _IS_RENDER and (bw < 55 or bh < 55):
                 sharp_face = self.sharpen_small_crop(aligned_face)
                 feat_sh = self.recognizer.feature(sharp_face).flatten().astype(np.float32)
                 n_sh = np.linalg.norm(feat_sh)
@@ -401,7 +426,8 @@ class VisionEngine:
                     fused += 0.25 * (feat_sh / n_sh)
 
         # Landmark-Guided Distance Super-Resolution Enhancement for Back-Row Seating (< 75px)
-        if (bw < 75 or bh < 75) and img_bgr is not None and img_bgr.size > 0 and len(face_data) >= 14:
+        # Enabled on local/smartboard; skipped on Render to keep CPU under 100s proxy limit
+        if not _IS_RENDER and (bw < 75 or bh < 75) and img_bgr is not None and img_bgr.size > 0 and len(face_data) >= 14:
             try:
                 img_h, img_w = img_bgr.shape[:2]
                 pad_x = int(bw * 0.75)
@@ -415,7 +441,7 @@ class VisionEngine:
                     upscaled = cv2.resize(sub_patch, (0, 0), fx=scale_patch, fy=scale_patch, interpolation=cv2.INTER_LANCZOS4)
                     lab = cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB)
                     l, a, b_ch = cv2.split(lab)
-                    cl = cv2.createCLAHE(clipLimit=2.4, tileGridSize=(8, 8)).apply(l)
+                    cl = self.clahe.apply(l)
                     enhanced_patch = cv2.cvtColor(cv2.merge((cl, a, b_ch)), cv2.COLOR_LAB2BGR)
 
                     f_mapped = face_data.copy()
@@ -638,6 +664,11 @@ class VisionEngine:
         import gc
         if max_keyframes < 0:
             max_keyframes = MAX_KEYFRAMES
+
+        # Guard against oversized payloads causing OOM on Render free tier
+        if _IS_RENDER and len(base64_frames) > 6:
+            base64_frames = base64_frames[:6]
+
         decoded_frames = []
         for idx, b64_str in enumerate(base64_frames):
             try:

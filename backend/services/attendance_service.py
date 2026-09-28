@@ -139,7 +139,15 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    # Keyframe count is env-aware: 4 on Render (512MB), 10 on local/smartboard (8GB)
+    # Build pre-indexed student template map for instant vectorized scoring
+    student_template_indices = {}
+    for idx, sid in enumerate(student_ids):
+        if sid not in student_template_indices:
+            student_template_indices[sid] = []
+        student_template_indices[sid].append(idx)
+    student_template_indices = {sid: np.array(idxs, dtype=int) for sid, idxs in student_template_indices.items()}
+
+    # Keyframe count is env-aware: 2 on Render (512MB), 8 on local/smartboard (8GB)
     selected_keyframes = vision.select_focal_keyframes(base64_frames)
     if not selected_keyframes:
         selected_keyframes = []
@@ -171,23 +179,29 @@ def process_smartboard_session(
             crop = img_bgr[y:min(y+h, h_img), x:min(x+w, w_img)]
             local_sharpness = vision.calculate_crop_sharpness(img_bgr, [x, y, w, h])
 
-            crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
-            crop_path = REVIEW_CROPS_DIR / crop_filename
-            crop_url = f"/static/uploads/review_crops/{crop_filename}"
-            if crop.size > 0:
-                cv2.imwrite(str(crop_path), crop)
-
             face_meta.append({
                 "face_box": [int(x), int(y), int(w), int(h)],
                 "sharpness": local_sharpness,
                 "is_distant": (w < 90 or h < 90),  # 4K: mid-row faces are ~80-120px
-                "crop_url": crop_url,
+                "crop": crop,
+                "crop_url": None,
                 "emb": emb
             })
             face_embs.append(emb)
 
         if not face_embs or ref_matrix.size == 0:
             return frame_idx, []
+
+        def _save_crop_if_needed(meta_item):
+            if meta_item["crop_url"]:
+                return meta_item["crop_url"]
+            c = meta_item.get("crop")
+            if c is not None and c.size > 0:
+                crop_filename = f"crop_{uuid.uuid4().hex[:10]}.jpg"
+                crop_path = REVIEW_CROPS_DIR / crop_filename
+                cv2.imwrite(str(crop_path), c)
+                meta_item["crop_url"] = f"/static/uploads/review_crops/{crop_filename}"
+            return meta_item["crop_url"]
 
         # Construct Similarity Matrix between Detected Faces and Registered Students
         # Shape: (num_faces, num_students)
@@ -199,14 +213,14 @@ def process_smartboard_session(
         for f_idx, emb in enumerate(face_embs):
             scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
             for s_col, s_id in enumerate(student_obj_ids):
-                s_scores = [scores_array[idx] for idx, sid in enumerate(student_ids) if sid == s_id]
-                if s_scores:
-                    s_sorted = sorted(s_scores, reverse=True)
+                idxs = student_template_indices.get(s_id)
+                if idxs is not None and len(idxs) > 0:
+                    s_scores = scores_array[idxs]
+                    s_sorted = np.sort(s_scores)[::-1]
                     # Weighted combination: 70% top-1, 20% top-2, 10% top-3
-                    # This is much more robust than peak-only and avoids lucky single-template spikes
-                    t1 = s_sorted[0]
-                    t2 = s_sorted[1] if len(s_sorted) > 1 else t1
-                    t3 = s_sorted[2] if len(s_sorted) > 2 else t2
+                    t1 = float(s_sorted[0])
+                    t2 = float(s_sorted[1]) if len(s_sorted) > 1 else t1
+                    t3 = float(s_sorted[2]) if len(s_sorted) > 2 else t2
                     comp_score = 0.70 * t1 + 0.20 * t2 + 0.10 * t3
                     sim_matrix[f_idx, s_col] = comp_score
 
@@ -227,10 +241,8 @@ def process_smartboard_session(
             row_scores = sorted(sim_matrix[r, :], reverse=True)
             margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
 
-            # Adaptive thresholds tuned for 4K smartboard face sizes:
-            # At 2560px native width a front-row face is ~150px, mid-row ~80px,
-            # back-row ~30-60px, and extreme back rows as small as ~10-20px.
-            face_w, face_h = face_meta[r]["face_box"][2], face_meta[r]["face_box"][3]
+            # Adaptive thresholds tuned for 4K smartboard face sizes
+            face_w, face_h = meta["face_box"][2], meta["face_box"][3]
             if face_w < 20 or face_h < 20:      # extreme back-row (ultra-small, 4K specific)
                 min_match_thresh = 0.33
                 min_margin_thresh = 0.015
@@ -246,6 +258,9 @@ def process_smartboard_session(
 
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
+            # Lazy write crop only if student was matched or close candidate
+            c_url = _save_crop_if_needed(meta) if (is_valid_student or match_score >= 0.30) else None
+
             candidates.append({
                 "face_box": meta["face_box"],
                 "best_student_id": st_id if is_valid_student else None,
@@ -253,7 +268,7 @@ def process_smartboard_session(
                 "margin": margin,
                 "sharpness": meta["sharpness"],
                 "is_distant": is_dist,
-                "crop_url": meta["crop_url"],
+                "crop_url": c_url,
                 "emb": meta["emb"]
             })
 
@@ -268,10 +283,13 @@ def process_smartboard_session(
                     "margin": 0.0,
                     "sharpness": meta["sharpness"],
                     "is_distant": meta["is_distant"],
-                    "crop_url": meta["crop_url"],
+                    "crop_url": None,
                     "emb": meta["emb"]
                 })
 
+        # Explicit cleanup of per-frame arrays
+        for m in face_meta:
+            m["crop"] = None
         del face_embs, sim_matrix, face_meta
         gc.collect()
         return frame_idx, candidates

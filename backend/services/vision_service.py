@@ -21,6 +21,19 @@ SFACE_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recogniti
 HIGH_DENSITY_SCORE_THRESHOLD = YUNET_SCORE_THRESHOLD  # 0.40 (raised from 0.30)
 MAX_CLASSROOM_DETECTIONS = 5000
 
+# --------------------------------------------------------------------------
+# Environment-aware memory limits
+# Render free tier: 512MB RAM -> conservative limits
+# Local / Smartboard (8GB): use full 4K pipeline
+# Set IS_RENDER=true in Render environment variables to activate safe mode.
+# --------------------------------------------------------------------------
+_IS_RENDER = os.environ.get("IS_RENDER", "").lower() in ("1", "true", "yes")
+MAX_FRAME_WIDTH  = 1280 if _IS_RENDER else 2560   # px: cap frame before inference
+MAX_KEYFRAMES    = 4    if _IS_RENDER else 10      # keyframes per session
+ENABLE_PASS4     = not _IS_RENDER                  # ultra 6x zoom (only on local/smartboard)
+print(f"[VisionEngine] Environment: {'Render (memory-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
+print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
+
 
 def _ensure_model_exists(file_path: str, url: str):
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
@@ -108,7 +121,7 @@ class VisionEngine:
         rescale = 1.0
         # 4K smartboard: allow up to 2560px (QHD) to keep more detail for distant faces.
         # Laptop/webcam frames (≤1920) are left at native resolution.
-        MAX_NATIVE_WIDTH = 2560
+        MAX_NATIVE_WIDTH = MAX_FRAME_WIDTH
         if orig_w > MAX_NATIVE_WIDTH:
             rescale = MAX_NATIVE_WIDTH / orig_w
             img_bgr = cv2.resize(
@@ -214,11 +227,10 @@ class VisionEngine:
 
                 # -------------------------------------------------------------------
                 # PASS 4 - Ultra Back-Row 6x Zoom (top 32% - 4K smartboard specific)
-                # Last 2-3 rows may have faces as small as 10-18px on a 4K sensor.
-                # Extreme zoom + strong CLAHE recovers minimal facial landmarks.
+                # Disabled on Render (512MB) to avoid SIGKILL. Enabled on local/smartboard.
                 # -------------------------------------------------------------------
                 ultra_h = int(seating_h * 0.32)
-                if ultra_h > 30:
+                if ENABLE_PASS4 and ultra_h > 30:
                     ultra_sectors = [
                         (0,             0, int(w * 0.36), ultra_h),
                         (int(w * 0.18), 0, int(w * 0.54), ultra_h),
@@ -614,7 +626,7 @@ class VisionEngine:
             pass
         return 0.0
 
-    def select_focal_keyframes(self, base64_frames: list, max_keyframes: int = 10):
+    def select_focal_keyframes(self, base64_frames: list, max_keyframes: int = -1):
         """
         Decodes and selects sharpest keyframes for each temporal bucket.
         For 4K smartboard sessions the camera sweeps a wide classroom area —
@@ -624,6 +636,8 @@ class VisionEngine:
         """
         import base64
         import gc
+        if max_keyframes < 0:
+            max_keyframes = MAX_KEYFRAMES
         decoded_frames = []
         for idx, b64_str in enumerate(base64_frames):
             try:
@@ -635,8 +649,8 @@ class VisionEngine:
                 if img_bgr is not None:
                     ih, iw = img_bgr.shape[:2]
                     # Preserve 4K detail up to 2560px (QHD); downscale anything larger
-                    if iw > 2560:
-                        img_bgr = cv2.resize(img_bgr, (2560, int(ih * 2560.0 / iw)), interpolation=cv2.INTER_AREA)
+                    if iw > MAX_FRAME_WIDTH:
+                        img_bgr = cv2.resize(img_bgr, (MAX_FRAME_WIDTH, int(ih * MAX_FRAME_WIDTH / iw)), interpolation=cv2.INTER_AREA)
                     sharpness = self.check_blurriness(img_bgr)
                     decoded_frames.append((idx, img_bgr, sharpness))
             except Exception:

@@ -139,8 +139,8 @@ def process_smartboard_session(
     else:
         ref_matrix = np.empty((0, 128), dtype=np.float32)
 
-    # 10 keyframes for full coverage of a wide classroom smartboard sweep
-    selected_keyframes = vision.select_focal_keyframes(base64_frames, max_keyframes=10)
+    # Keyframe count is env-aware: 4 on Render (512MB), 10 on local/smartboard (8GB)
+    selected_keyframes = vision.select_focal_keyframes(base64_frames)
     if not selected_keyframes:
         selected_keyframes = []
 

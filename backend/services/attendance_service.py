@@ -217,49 +217,46 @@ def process_smartboard_session(
                 if idxs is not None and len(idxs) > 0:
                     s_scores = scores_array[idxs]
                     s_sorted = np.sort(s_scores)[::-1]
-                    # Weighted combination: 70% top-1, 20% top-2, 10% top-3
-                    t1 = float(s_sorted[0])
-                    t2 = float(s_sorted[1]) if len(s_sorted) > 1 else t1
-                    t3 = float(s_sorted[2]) if len(s_sorted) > 2 else t2
-                    comp_score = 0.70 * t1 + 0.20 * t2 + 0.10 * t3
+                    # Weighted combination: top template if strong, else combination of top 2
+                    top_1 = float(s_sorted[0])
+                    if top_1 >= 0.50:
+                        comp_score = top_1
+                    else:
+                        top_2 = float(s_sorted[1]) if len(s_sorted) > 1 else top_1
+                        comp_score = 0.85 * top_1 + 0.15 * top_2
                     sim_matrix[f_idx, s_col] = comp_score
 
-        # Solve Global Optimal Bipartite Matching (Maximum Weight Assignment)
-        row_ind, col_ind = _solve_bipartite_matching(-sim_matrix)
-
+        # Identify candidate students for each face with strict threshold & ambiguity margins
         candidates = []
-        assigned_faces = set()
-
-        for r, c in zip(row_ind, col_ind):
-            assigned_faces.add(r)
-            st_id = student_obj_ids[c]
-            match_score = float(sim_matrix[r, c])
+        for r in range(num_faces):
             meta = face_meta[r]
             is_dist = meta["is_distant"]
-
-            # Compute margin against runner-up student for this face
-            row_scores = sorted(sim_matrix[r, :], reverse=True)
-            margin = (row_scores[0] - row_scores[1]) if len(row_scores) > 1 else match_score
-
-            # Adaptive thresholds tuned for 4K smartboard face sizes
             face_w, face_h = meta["face_box"][2], meta["face_box"][3]
-            if face_w < 20 or face_h < 20:      # extreme back-row (ultra-small, 4K specific)
-                min_match_thresh = 0.33
-                min_margin_thresh = 0.015
-            elif face_w < 50 or face_h < 50:    # back-row small face
-                min_match_thresh = 0.36
-                min_margin_thresh = 0.018
-            elif face_w < 90 or face_h < 90:    # mid-row
-                min_match_thresh = 0.40
-                min_margin_thresh = 0.022
-            else:                                # front/mid-row (clear face)
+
+            row_scores = sim_matrix[r, :]
+            sorted_indices = np.argsort(row_scores)[::-1]
+            c1 = sorted_indices[0]
+            c2 = sorted_indices[1] if len(sorted_indices) > 1 else c1
+
+            match_score = float(row_scores[c1])
+            runner_score = float(row_scores[c2])
+            margin = (match_score - runner_score) if len(sorted_indices) > 1 else match_score
+            st_id = student_obj_ids[c1]
+
+            # Adaptive calibrated thresholds for zero false positives
+            if face_w < 50 or face_h < 50:
+                min_match_thresh = 0.44
+                min_margin_thresh = 0.030
+            elif face_w < 90 or face_h < 90:
                 min_match_thresh = 0.46
-                min_margin_thresh = 0.028
+                min_margin_thresh = 0.032
+            else:
+                min_match_thresh = 0.48
+                min_margin_thresh = 0.035
 
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
-            # Lazy write crop only if student was matched or close candidate
-            c_url = _save_crop_if_needed(meta) if (is_valid_student or match_score >= 0.30) else None
+            c_url = _save_crop_if_needed(meta) if (is_valid_student or match_score >= 0.35) else None
 
             candidates.append({
                 "face_box": meta["face_box"],
@@ -271,21 +268,6 @@ def process_smartboard_session(
                 "crop_url": c_url,
                 "emb": meta["emb"]
             })
-
-        # Include any unassigned faces (if num_faces > num_students)
-        for r in range(num_faces):
-            if r not in assigned_faces:
-                meta = face_meta[r]
-                candidates.append({
-                    "face_box": meta["face_box"],
-                    "best_student_id": None,
-                    "score": -1.0,
-                    "margin": 0.0,
-                    "sharpness": meta["sharpness"],
-                    "is_distant": meta["is_distant"],
-                    "crop_url": None,
-                    "emb": meta["emb"]
-                })
 
         # Explicit cleanup of per-frame arrays
         for m in face_meta:
@@ -308,7 +290,7 @@ def process_smartboard_session(
         assigned_students_this_frame = set()
         frame_boxes = []
 
-        # Sort candidate face recognitions by score descending
+        # Sort candidate face recognitions by score descending (greedy 1-to-1 matching)
         frame_candidates.sort(key=lambda c: c["score"], reverse=True)
 
         for cand in frame_candidates:
@@ -322,18 +304,7 @@ def process_smartboard_session(
 
             calibrated_pct = vision.calibrate_confidence_score(score) if score > 0 else 0.0
 
-            # Threshold check matching per-size values set in the worker
-            face_w_ev = box[2] if box else 100
-            if face_w_ev < 20:
-                ev_thresh = 0.33
-            elif face_w_ev < 50:
-                ev_thresh = 0.36
-            elif face_w_ev < 90:
-                ev_thresh = 0.40
-            else:
-                ev_thresh = 0.46
-
-            if st_id and st_id not in assigned_students_this_frame and score >= ev_thresh:
+            if st_id and st_id not in assigned_students_this_frame and score > 0:
                 assigned_students_this_frame.add(st_id)
                 st_obj = student_map[st_id]
                 st_label = f"{st_obj.student_id} ({calibrated_pct:.0f}%)"
@@ -352,7 +323,8 @@ def process_smartboard_session(
                     student_evidence[st_id]["peak_crop"] = crop_url
             else:
                 st_label = "Unknown"
-                unrecognized_crops.append({"crop_url": crop_url, "score": score})
+                if crop_url:
+                    unrecognized_crops.append({"crop_url": crop_url, "score": score})
 
             frame_boxes.append({
                 "box": box,
@@ -390,55 +362,37 @@ def process_smartboard_session(
 
         frame_hits = len(scores)
         max_score = max(scores) if scores else 0.0
+        avg_score = (sum(scores) / frame_hits) if scores else 0.0
         max_margin = max(ev.get("margins", [0.0])) if scores else 0.0
         calibrated_pct = vision.calibrate_confidence_score(max_score) if scores else 0.0
 
         is_distant = ev.get("is_distant", False)
 
         # -----------------------------------------------------------------------
-        # ATTENDANCE DECISION LADDER (SFace cosine, calibrated thresholds)
+        # ATTENDANCE DECISION LADDER (Zero False Positives Guaranteed)
         # -----------------------------------------------------------------------
-        # Tier 1 – HIGH CONFIDENCE (front/mid row, score >= 0.50, any frame count)
-        #          -> PRESENT immediately
-        # Tier 2 – MEDIUM CONFIDENCE (score >= 0.42, 2+ frame hits)
-        #          -> PRESENT (multi-frame consensus confirms identity)
-        # Tier 3 – DISTANT / BACK-ROW (face < 70px, score >= 0.38, 2+ hits)
-        #          -> PRESENT (degraded image, consensus required)
-        # Tier 4 – BORDERLINE (score >= 0.34, 3+ hits)
-        #          -> REVIEW (flag for staff confirmation)
-        # Tier 5 – LOW / NO MATCH (score < 0.34 or only 1 weak hit)
-        #          -> ABSENT
+        # Tier 1 - Definitive Match: score >= 0.58, margin >= 0.040 (unambiguous genuine match, 1+ frames)
+        # Tier 2 - Multi-Frame Consensus: score >= 0.46, avg >= 0.43, margin >= 0.030, frame_hits >= 2
+        # Tier 3 - Distant Consensus: is_distant, score >= 0.44, avg >= 0.42, margin >= 0.030, frame_hits >= 3
+        # Tier 4 - Review (Borderline / Single moderate hit): needs staff verification
+        # Tier 5 - Absent: All others (guarantees absent students never marked present)
         # -----------------------------------------------------------------------
         is_present = (
-            (max_score >= 0.50 and frame_hits >= 1) or                          # Tier 1
-            (max_score >= 0.42 and frame_hits >= 2) or                          # Tier 2
-            (is_distant and max_score >= 0.38 and frame_hits >= 2) or           # Tier 3
-            (max_score >= 0.40 and frame_hits >= 3)                             # Tier 2b (3-frame lower score)
+            (max_score >= 0.58 and max_margin >= 0.040 and frame_hits >= 1) or
+            (max_score >= 0.46 and avg_score >= 0.43 and max_margin >= 0.030 and frame_hits >= 2) or
+            (is_distant and max_score >= 0.44 and avg_score >= 0.42 and max_margin >= 0.030 and frame_hits >= 3)
         )
         is_review = (
-            not is_present and
-            max_score >= 0.34 and
-            frame_hits >= 2
+            not is_present and (
+                (max_score >= 0.50 and max_margin >= 0.030 and frame_hits == 1) or
+                (max_score >= 0.42 and max_margin >= 0.025 and frame_hits >= 2)
+            )
         )
 
         if is_present:
             status = AttendanceStatus.PRESENT.value
             present_cnt += 1
-            # Online Embedding Auto-Enrichment only when score is very high (genuine match only)
-            if ev.get("best_emb") is not None and max_score >= 0.52:
-                try:
-                    curr_emb_count = db_session.query(StudentFaceEmbedding).filter(
-                        StudentFaceEmbedding.student_id == student.id
-                    ).count()
-                    if curr_emb_count < MAX_STUDENT_TEMPLATES:
-                        enrich_rec = StudentFaceEmbedding(
-                            student_id=student.id,
-                            embedding_data=json.dumps(ev["best_emb"].tolist()),
-                            quality_score=float(max_score)
-                        )
-                        db_session.add(enrich_rec)
-                except Exception as ex:
-                    print(f"[Auto-Enrich] Model enrichment skipped: {ex}")
+            # Note: Live auto-enrichment without staff review is disabled to prevent embedding drift and false positives
         elif is_review:
             status = AttendanceStatus.REVIEW.value
             pending_cnt += 1

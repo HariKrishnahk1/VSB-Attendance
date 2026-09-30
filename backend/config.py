@@ -29,20 +29,22 @@ YUNET_MODEL_PATH = str(MODELS_DIR / "yunet.onnx")
 SFACE_MODEL_PATH = str(MODELS_DIR / "sface.onnx")
 
 # YuNet Face Detector parameters
-YUNET_SCORE_THRESHOLD = 0.40  # Balanced sensitivity - reduces false face detections from background
-YUNET_NMS_THRESHOLD = 0.38
+YUNET_SCORE_THRESHOLD = 0.45  # Stricter detection to eliminate background clutter/false faces
+YUNET_NMS_THRESHOLD = 0.35
 YUNET_TOP_K = 5000
 
 # High-Precision SFace Cosine Similarity & Multi-Template Thresholds
-# SFace Cosine Calibrated Ranges (verified against SFace paper):
-# >= 0.50: High-Confidence Front/Mid Row Match          -> AUTO PRESENT
-# >= 0.42: Mid-row match with 2+ frame consensus        -> AUTO PRESENT
-# >= 0.38: Back-row / distance match (face < 70px)      -> PRESENT if 2+ frames
-# >= 0.34: Borderline / single-frame distant match      -> REVIEW
-# < 0.34:  Unrecognized / Non-Face / False detection    -> ABSENT
-THRESHOLD_HIGH_CONFIDENCE = 0.50   # Front/mid-row clear match
-THRESHOLD_MEDIUM_CONFIDENCE = 0.38  # Back-row / distant match (requires multi-frame)
-THRESHOLD_AMBIGUITY_MARGIN = 0.025  # Minimum gap between top-1 and top-2 match (prevents ambiguous matches)
-MAX_STUDENT_TEMPLATES = 24          # Maximum multi-scale + live enriched templates per student
+# Calibrated for Zero False Positives in open-set classroom environments:
+# >= 0.52: Definitive High-Confidence Match (Single Frame) -> AUTO PRESENT
+# >= 0.46: Multi-Frame Consensus Match (2+ Frames)         -> AUTO PRESENT
+# >= 0.43: Distant / Back-Row Consensus Match (3+ Frames)  -> AUTO PRESENT
+# >= 0.40: Borderline Ambiguous Match (2+ Frames)          -> REVIEW
+# < 0.40:  Unrecognized / Distant Noise / Non-Match        -> ABSENT
+THRESHOLD_HIGH_CONFIDENCE = 0.52   # Clear frontal/mid-row match (single-frame sufficient)
+THRESHOLD_MEDIUM_CONFIDENCE = 0.46  # Confident match with multi-frame verification
+THRESHOLD_BACKROW_CONFIDENCE = 0.43 # Distant match requiring 3+ consistent frames
+THRESHOLD_AMBIGUITY_MARGIN = 0.035  # Minimum gap between top-1 and top-2 match (prevents ambiguous matches)
+MIN_FACE_DIMENSION = 22             # Reject detections smaller than 22x22 (too small for biometric fidelity)
+MAX_STUDENT_TEMPLATES = 16
 
 

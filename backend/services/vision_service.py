@@ -141,9 +141,8 @@ class VisionEngine:
         with self._model_lock:
             # -------------------------------------------------------------------
             # PASS 1 - Full-frame native scan
-            # Threshold lowered for 4K smartboard: distant faces are small pixels
             # -------------------------------------------------------------------
-            pass1_thresh = 0.30 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
+            pass1_thresh = 0.40 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
             self.detector.setScoreThreshold(pass1_thresh)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
@@ -179,7 +178,7 @@ class VisionEngine:
                     interp_p2 = cv2.INTER_LANCZOS4
                     p2_scale_cap = 2.5
 
-                self.detector.setScoreThreshold(0.26)
+                self.detector.setScoreThreshold(0.36)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -207,11 +206,12 @@ class VisionEngine:
 
                 # -------------------------------------------------------------------
                 # PASS 3 - Back-Row Far-Bench Band (top 52% of seating height)
-                # Render: 1 continuous top-band scan
-                # Local / Smartboard: 5 sectors with CLAHE + 3.5x Lanczos zoom
+                # Only on high-resolution classroom wide frames (w >= 1600) to prevent
+                # magnifying webcam / low-res background noise.
                 # -------------------------------------------------------------------
+                is_wide_classroom = (w >= 1600 and h >= 900)
                 far_h = int(seating_h * 0.52)
-                if far_h > 40:
+                if is_wide_classroom and far_h > 40:
                     if _IS_RENDER:
                         far_sectors = [(0, 0, w, far_h)]
                         max_far_dim = 960.0
@@ -229,11 +229,11 @@ class VisionEngine:
                         interp_p3 = cv2.INTER_LANCZOS4
                         p3_scale_cap = 3.5
 
-                    self.detector.setScoreThreshold(0.22)
+                    self.detector.setScoreThreshold(0.35)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1
-                        if fw < 30 or fh < 30:
+                        if fw < 40 or fh < 40:
                             continue
                         scale_far = min(p3_scale_cap, max_far_dim / max(fw, 1))
                         target_fw = int(fw * scale_far)
@@ -255,11 +255,11 @@ class VisionEngine:
                                 all_detected_faces.append(f_mapped)
 
                 # -------------------------------------------------------------------
-                # PASS 4 - Ultra Back-Row 6x Zoom (top 32% - 4K smartboard specific)
-                # Disabled on Render (512MB) to avoid SIGKILL. Enabled on local/smartboard.
+                # PASS 4 - Ultra Back-Row Zoom (top 32% - 4K smartboard specific)
+                # Only on high-resolution classroom wide frames (w >= 1600).
                 # -------------------------------------------------------------------
                 ultra_h = int(seating_h * 0.32)
-                if ENABLE_PASS4 and ultra_h > 30:
+                if is_wide_classroom and ENABLE_PASS4 and ultra_h > 30:
                     ultra_sectors = [
                         (0,             0, int(w * 0.36), ultra_h),
                         (int(w * 0.18), 0, int(w * 0.54), ultra_h),
@@ -267,13 +267,13 @@ class VisionEngine:
                         (int(w * 0.46), 0, int(w * 0.82), ultra_h),
                         (int(w * 0.64), 0, w,              ultra_h),
                     ]
-                    self.detector.setScoreThreshold(0.18)
+                    self.detector.setScoreThreshold(0.34)
                     for ux1, uy1, ux2, uy2 in ultra_sectors:
                         u_crop = img_bgr[uy1:uy2, ux1:ux2]
                         uw, uh = ux2 - ux1, uy2 - uy1
-                        if uw < 20 or uh < 20:
+                        if uw < 32 or uh < 32:
                             continue
-                        scale_ultra = min(6.0, 1920.0 / max(uw, 1))
+                        scale_ultra = min(3.5, 1920.0 / max(uw, 1))
                         target_uw = min(int(uw * scale_ultra), 1920)
                         target_uh = min(int(uh * scale_ultra), 1920)
                         u_enh = self.enhance_contrast(u_crop)
@@ -311,8 +311,25 @@ class VisionEngine:
                     f[lm] *= inv
                     f[lm + 1] *= inv
 
-        # 4K: faces in back rows can be as small as 5px after rescale mapping
-        valid_faces = [f for f in all_detected_faces if f[2] >= 5 and f[3] >= 5]
+        # Validate facial geometry: size, aspect ratio, and landmark orientation
+        valid_faces = []
+        for f in all_detected_faces:
+            fw, fh = f[2], f[3]
+            # Minimum dimension: 36x36 pixels to preserve facial biometric fidelity
+            # Eliminates small noise artifacts, buttons, and background clutter
+            if fw < 36 or fh < 36:
+                continue
+            # Aspect ratio filtering: human faces in classroom perspective have aspect between 0.65 and 1.90
+            aspect = float(fh) / max(float(fw), 1.0)
+            if aspect < 0.65 or aspect > 1.90:
+                continue
+            # Landmark integrity check: eyes must be above mouth
+            if len(f) >= 14:
+                eye_y = min(f[5], f[7])
+                mouth_y = max(f[11], f[13])
+                if mouth_y < eye_y:
+                    continue
+            valid_faces.append(f)
         return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.35)
 
     def _suppress_duplicate_faces(self, face_list, iou_threshold=0.38, iom_threshold=0.50):
@@ -371,9 +388,8 @@ class VisionEngine:
 
     def extract_embedding(self, img_bgr, face_data, use_tta: bool = True):
         """
-        Extracts 128-D facial feature vector using SFace landmark alignment and L2 normalization.
-        For distant / back-bench faces (< 75px), utilizes landmark-guided super-resolution patch alignment,
-        unsharp masking, and bilateral symmetry Test-Time Augmentation (TTA) to maximize matching precision.
+        Extracts high-fidelity 128-D facial feature vector using SFace canonical landmark alignment and L2 normalization.
+        Uses clean bilateral horizontal flip Test-Time Augmentation (TTA) without synthetic distortion.
         """
         aligned_face = None
         box = face_data[:4].astype(int)
@@ -402,85 +418,30 @@ class VisionEngine:
         feat_flat = feature.flatten().astype(np.float32)
         norm = np.linalg.norm(feat_flat)
         if norm > 0:
-            feat_flat = feat_flat / norm
+            feat_flat /= norm
 
         if not use_tta or aligned_face is None:
             return feat_flat
 
-        # Test-Time Augmentation (TTA) Bilateral Symmetry Fusion
+        # Test-Time Augmentation (TTA) Bilateral Symmetry Fusion (50% canonical, 50% mirror)
         with self._model_lock:
             flip_face = cv2.flip(aligned_face, 1)
             feat_flip = self.recognizer.feature(flip_face).flatten().astype(np.float32)
-            n_flip = np.linalg.norm(feat_flip)
-            if n_flip > 0:
-                feat_flip /= n_flip
+            norm_flip = np.linalg.norm(feat_flip)
+            if norm_flip > 0:
+                feat_flip /= norm_flip
 
-            fused = 0.60 * feat_flat + 0.40 * feat_flip
-
-            # Distance adaptation: If face is small (far-distance classroom seating), sharpen landmarks
-            if not _IS_RENDER and (bw < 55 or bh < 55):
-                sharp_face = self.sharpen_small_crop(aligned_face)
-                feat_sh = self.recognizer.feature(sharp_face).flatten().astype(np.float32)
-                n_sh = np.linalg.norm(feat_sh)
-                if n_sh > 0:
-                    fused += 0.25 * (feat_sh / n_sh)
-
-        # Landmark-Guided Distance Super-Resolution Enhancement for Back-Row Seating (< 75px)
-        # Enabled on local/smartboard; skipped on Render to keep CPU under 100s proxy limit
-        if not _IS_RENDER and (bw < 75 or bh < 75) and img_bgr is not None and img_bgr.size > 0 and len(face_data) >= 14:
-            try:
-                img_h, img_w = img_bgr.shape[:2]
-                pad_x = int(bw * 0.75)
-                pad_y = int(bh * 0.75)
-                x1, y1 = max(0, x - pad_x), max(0, y - pad_y)
-                x2, y2 = min(img_w, x + bw + pad_x), min(img_h, y + bh + pad_y)
-                sub_patch = img_bgr[y1:y2, x1:x2]
-
-                if sub_patch.size > 0 and sub_patch.shape[0] > 8 and sub_patch.shape[1] > 8:
-                    scale_patch = 3.0
-                    upscaled = cv2.resize(sub_patch, (0, 0), fx=scale_patch, fy=scale_patch, interpolation=cv2.INTER_LANCZOS4)
-                    lab = cv2.cvtColor(upscaled, cv2.COLOR_BGR2LAB)
-                    l, a, b_ch = cv2.split(lab)
-                    cl = self.clahe.apply(l)
-                    enhanced_patch = cv2.cvtColor(cv2.merge((cl, a, b_ch)), cv2.COLOR_LAB2BGR)
-
-                    f_mapped = face_data.copy()
-                    f_mapped[0] = (face_data[0] - x1) * scale_patch
-                    f_mapped[1] = (face_data[1] - y1) * scale_patch
-                    f_mapped[2] = face_data[2] * scale_patch
-                    f_mapped[3] = face_data[3] * scale_patch
-                    for lm in range(4, 14, 2):
-                        f_mapped[lm] = (face_data[lm] - x1) * scale_patch
-                        f_mapped[lm + 1] = (face_data[lm + 1] - y1) * scale_patch
-
-                    with self._model_lock:
-                        aligned_patch = self.recognizer.alignCrop(enhanced_patch, f_mapped)
-                        if aligned_patch is not None and aligned_patch.size > 0:
-                            feat_patch = self.recognizer.feature(aligned_patch).flatten().astype(np.float32)
-                            n_p = np.linalg.norm(feat_patch)
-                            if n_p > 0:
-                                feat_patch /= n_p
-                                flip_p = cv2.flip(aligned_patch, 1)
-                                feat_flip_p = self.recognizer.feature(flip_p).flatten().astype(np.float32)
-                                n_fp = np.linalg.norm(feat_flip_p)
-                                if n_fp > 0:
-                                    feat_patch = 0.65 * feat_patch + 0.35 * (feat_flip_p / n_fp)
-                                    feat_patch /= np.linalg.norm(feat_patch)
-                                # Distance fusion: blend enhanced super-res patch with canonical
-                                fused = 0.65 * feat_patch + 0.35 * fused
-            except Exception:
-                pass
-
-        n_fused = np.linalg.norm(fused)
-        if n_fused > 0:
-            fused /= n_fused
+        fused = 0.50 * feat_flat + 0.50 * feat_flip
+        norm_fused = np.linalg.norm(fused)
+        if norm_fused > 0:
+            fused /= norm_fused
         return fused
 
     def generate_deep_biometric_profile(self, img_bgr, face_data):
         """
-        Builds a comprehensive 12-template deep neural biometric profile for a student face.
-        Provides robust invariant matching against classroom distance, extreme shadows,
-        glare, head yaw angles, and sensor noise.
+        Builds a robust, pure biometric profile for a registered student.
+        Uses canonical alignment, bilateral mirror, golden TTA, and balanced lighting profiles.
+        NO artificial smudges, heavy blurring, or synthetic low-res artifacts.
         """
         aligned_face = None
         with self._model_lock:
@@ -516,7 +477,7 @@ class VisionEngine:
         feat_flip = _get_feat(face_flip)
 
         # 3. Golden Symmetrical TTA Fusion (Orig + Flip)
-        feat_fused = feat_orig + feat_flip
+        feat_fused = 0.50 * feat_orig + 0.50 * feat_flip
         norm_fused = np.linalg.norm(feat_fused)
         if norm_fused > 0:
             feat_fused /= norm_fused
@@ -527,78 +488,31 @@ class VisionEngine:
         # 4. Adaptive Contrast & Detail Normalization (CLAHE)
         try:
             clahe_face = self.enhance_contrast(aligned_face)
-            feat_clahe = _get_feat(clahe_face)
-            templates.append(feat_clahe)  # Template 4: Contrast Normalized
+            templates.append(_get_feat(clahe_face))  # Template 4: Contrast Normalized
         except Exception:
             pass
 
-        # 5. Classroom Shadow / Underexposed Profile (Gamma 0.72)
+        # 5. Mild Classroom Shadow (Gamma 0.85)
         try:
-            lut_shadow = np.array([((i / 255.0) ** (1.0 / 0.72)) * 255 for i in range(256)]).astype('uint8')
-            shadow_face = cv2.LUT(aligned_face, lut_shadow)
-            feat_shadow = _get_feat(shadow_face)
-            templates.append(feat_shadow)  # Template 5: Shadow Profile
+            lut_shadow = np.array([((i / 255.0) ** (1.0 / 0.85)) * 255 for i in range(256)]).astype('uint8')
+            templates.append(_get_feat(cv2.LUT(aligned_face, lut_shadow)))  # Template 5: Shadow Profile
         except Exception:
             pass
 
-        # 6. Sunlight / Glare Profile (Gamma 1.35)
+        # 6. Mild Classroom Glare (Gamma 1.15)
         try:
-            lut_glare = np.array([((i / 255.0) ** (1.0 / 1.35)) * 255 for i in range(256)]).astype('uint8')
-            glare_face = cv2.LUT(aligned_face, lut_glare)
-            feat_glare = _get_feat(glare_face)
-            templates.append(feat_glare)  # Template 6: Glare Profile
+            lut_glare = np.array([((i / 255.0) ** (1.0 / 1.15)) * 255 for i in range(256)]).astype('uint8')
+            templates.append(_get_feat(cv2.LUT(aligned_face, lut_glare)))  # Template 6: Glare Profile
         except Exception:
             pass
 
-        # 7. Far-Row Distance Simulation (35x35 downscaled with anti-aliasing)
-        try:
-            face_d35 = cv2.resize(cv2.resize(aligned_face, (35, 35), interpolation=cv2.INTER_AREA), (112, 112), interpolation=cv2.INTER_LINEAR)
-            feat_d35 = _get_feat(face_d35)
-            templates.append(feat_d35)  # Template 7: Far-Distance Profile
-        except Exception:
-            pass
-
-        # 8. Mid-Row Distance Simulation (60x60 downscaled)
-        try:
-            face_d60 = cv2.resize(cv2.resize(aligned_face, (60, 60), interpolation=cv2.INTER_AREA), (112, 112), interpolation=cv2.INTER_LINEAR)
-            feat_d60 = _get_feat(face_d60)
-            templates.append(feat_d60)  # Template 8: Mid-Distance Profile
-        except Exception:
-            pass
-
-        # 9. Ultra-Far Back-Row Distance Simulation (20x20 downscaled with anti-aliasing)
-        try:
-            face_d20 = cv2.resize(cv2.resize(aligned_face, (20, 20), interpolation=cv2.INTER_AREA), (112, 112), interpolation=cv2.INTER_LANCZOS4)
-            feat_d20 = _get_feat(face_d20)
-            templates.append(feat_d20)  # Template 9: Ultra-Far Back-Row Profile
-        except Exception:
-            pass
-
-        # 10. Distant Back-Row Shadow Profile (Gamma 0.70 + 22x22 downscale)
-        try:
-            lut_bk = np.array([((i / 255.0) ** (1.0 / 0.70)) * 255 for i in range(256)]).astype('uint8')
-            dark_face = cv2.LUT(aligned_face, lut_bk)
-            dark_d22 = cv2.resize(cv2.resize(dark_face, (22, 22), interpolation=cv2.INTER_AREA), (112, 112), interpolation=cv2.INTER_LANCZOS4)
-            feat_dark22 = _get_feat(dark_d22)
-            templates.append(feat_dark22)  # Template 10: Back-Row Shadow Profile
-        except Exception:
-            pass
-
-        # 11. Landmark Feature Sharpening (Unsharp Masking)
-        try:
-            face_sharp = self.sharpen_small_crop(aligned_face)
-            feat_sharp = _get_feat(face_sharp)
-            templates.append(feat_sharp)  # Template 11: High-Pass Sharpened Profile
-        except Exception:
-            pass
-
-        # 12. Student Master Centroid Vector (Normalized Mean of all templates)
+        # 7. Student Master Centroid Vector (Normalized Mean of all genuine templates)
         if templates:
             centroid = np.mean(templates, axis=0)
             n_c = np.linalg.norm(centroid)
             if n_c > 0:
                 centroid /= n_c
-            templates.append(centroid)  # Template 12: Centroid Prototype
+            templates.append(centroid)  # Template 7: Centroid Prototype
 
         return templates
 
@@ -721,26 +635,26 @@ class VisionEngine:
         """
         Converts raw SFace cosine similarity (-1.0 to 1.0) into a realistic, calibrated percentage (0.0 to 100.0).
         SFace Cosine Standard:
-          - < 0.18: Non-match / Noise (0% - 18%)
-          - 0.18 to 0.28: Far back-row match under camera distortion (68% - 82%)
-          - 0.28 to 0.42: Mid/far row strong match (82% - 93%)
-          - 0.42 to 0.60: Crystal clear classroom match (93% - 98%)
-          - > 0.60: Definitive High-Confidence Match (98% - 99.8%)
+          - < 0.36: Non-match / Noise (0% - 35%)
+          - 0.36 to 0.44: Borderline / Low similarity (35% - 65%)
+          - 0.44 to 0.52: Good classroom match (65% - 85%)
+          - 0.52 to 0.62: High-confidence match (85% - 95%)
+          - > 0.62: Definitive biometric match (95% - 99.8%)
         """
         s = float(raw_cosine_score)
-        if s <= 0.18:
-            return max(0.0, round(s * 100.0, 1))
-        elif s < 0.28:
-            pct = 68.0 + ((s - 0.18) / 0.10) * 14.0
+        if s <= 0.30:
+            return max(0.0, round(s * 70.0, 1))
+        elif s < 0.40:
+            pct = 25.0 + ((s - 0.30) / 0.10) * 35.0
             return round(pct, 1)
-        elif s < 0.42:
-            pct = 82.0 + ((s - 0.28) / 0.14) * 11.0
+        elif s < 0.50:
+            pct = 60.0 + ((s - 0.40) / 0.10) * 20.0
             return round(pct, 1)
-        elif s < 0.60:
-            pct = 93.0 + ((s - 0.42) / 0.18) * 5.0
+        elif s < 0.62:
+            pct = 80.0 + ((s - 0.50) / 0.12) * 15.0
             return round(pct, 1)
         else:
-            pct = 98.0 + min(1.8, (s - 0.60) * 6.0)
+            pct = 95.0 + min(4.8, (s - 0.62) * 20.0)
             return round(pct, 1)
 
     def process_single_image(self, img_bytes_or_path):

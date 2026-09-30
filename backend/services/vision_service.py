@@ -35,7 +35,7 @@ _IS_RENDER = (
     os.environ.get("RENDER_INSTANCE_ID") is not None
 )
 MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 960 if _IS_RENDER else 2560))
-MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 2 if _IS_RENDER else 8))
+MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 4 if _IS_RENDER else 24))
 ENABLE_PASS4     = (not _IS_RENDER) and (os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes"))
 print(f"[VisionEngine] Environment: {'Render Cloud (memory/CPU-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
 print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
@@ -143,7 +143,7 @@ class VisionEngine:
             # -------------------------------------------------------------------
             # PASS 1 - Full-frame native scan
             # -------------------------------------------------------------------
-            pass1_thresh = 0.32 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
+            pass1_thresh = 0.26 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
             self.detector.setScoreThreshold(pass1_thresh)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
@@ -152,34 +152,35 @@ class VisionEngine:
                     all_detected_faces.append(f)
 
             if is_classroom and h > 80 and w > 120:
-                seating_h = int(h * 0.92)  # capture more of top seating rows
+                seating_top = int(h * 0.05)
+                seating_bottom = int(h * 0.96)
 
                 # -------------------------------------------------------------------
-                # PASS 2 - Mid-Distance Seating Scan
-                # Render: 2 wide overlapping sectors with fast INTER_LINEAR
+                # PASS 2 - Full Seating-Plane Columns (Front & Mid Rows)
+                # Render: 2 wide overlapping sectors
                 # Local / Smartboard: 5 overlapping sectors with high-precision zoom
                 # -------------------------------------------------------------------
                 if _IS_RENDER:
                     sectors = [
-                        (0,              0, int(w * 0.60), seating_h),  # Left 60%
-                        (int(w * 0.40),  0, w,              seating_h),  # Right 60%
+                        (0,              seating_top, int(w * 0.60), seating_bottom),
+                        (int(w * 0.40),  seating_top, w,              seating_bottom),
                     ]
                     max_tile_dim = 960.0
                     interp_p2 = cv2.INTER_LINEAR
                     p2_scale_cap = 1.8
                 else:
                     sectors = [
-                        (0,              0, int(w * 0.42), seating_h),   # Far Left
-                        (int(w * 0.14),  0, int(w * 0.58), seating_h),  # Centre-Left
-                        (int(w * 0.29),  0, int(w * 0.71), seating_h),  # Dead Centre
-                        (int(w * 0.42),  0, int(w * 0.86), seating_h),  # Centre-Right
-                        (int(w * 0.58),  0, w,              seating_h),  # Far Right
+                        (0,              seating_top, int(w * 0.42), seating_bottom),   # Far Left
+                        (int(w * 0.14),  seating_top, int(w * 0.58), seating_bottom),  # Centre-Left
+                        (int(w * 0.29),  seating_top, int(w * 0.71), seating_bottom),  # Dead Centre
+                        (int(w * 0.42),  seating_top, int(w * 0.86), seating_bottom),  # Centre-Right
+                        (int(w * 0.58),  seating_top, w,              seating_bottom),  # Far Right
                     ]
                     max_tile_dim = 1920.0
                     interp_p2 = cv2.INTER_LANCZOS4
                     p2_scale_cap = 2.5
 
-                self.detector.setScoreThreshold(0.28)
+                self.detector.setScoreThreshold(0.24)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -206,38 +207,40 @@ class VisionEngine:
                             all_detected_faces.append(f_mapped)
 
                 # -------------------------------------------------------------------
-                # PASS 3 - Back-Row Far-Bench Band (top 52% of seating height)
-                # Scans all classroom frames (1080p, 720p, 4K) to detect distant students
+                # PASS 3 - Distant Upper-Back Seating Band (Rows 5-10, y: 8% to 58%)
+                # High-zoom + CLAHE contrast boost to cleanly capture 12-25px distant faces
                 # -------------------------------------------------------------------
-                far_h = int(seating_h * 0.52)
+                far_y1 = int(h * 0.08)
+                far_y2 = int(h * 0.58)
+                far_h = far_y2 - far_y1
                 if far_h > 35:
                     if _IS_RENDER:
-                        far_sectors = [(0, 0, w, far_h)]
+                        far_sectors = [(0, far_y1, w, far_y2)]
                         max_far_dim = 960.0
                         interp_p3 = cv2.INTER_LINEAR
                         p3_scale_cap = 1.8
                     elif w >= 1200:
                         far_sectors = [
-                            (0,             0, int(w * 0.40), far_h),   # Far-Left back
-                            (int(w * 0.15), 0, int(w * 0.55), far_h),  # Centre-Left back
-                            (int(w * 0.30), 0, int(w * 0.70), far_h),  # Centre back
-                            (int(w * 0.45), 0, int(w * 0.85), far_h),  # Centre-Right back
-                            (int(w * 0.60), 0, w,              far_h),  # Far-Right back
+                            (0,             far_y1, int(w * 0.38), far_y2),   # Far-Left back
+                            (int(w * 0.16), far_y1, int(w * 0.54), far_y2),  # Centre-Left back
+                            (int(w * 0.31), far_y1, int(w * 0.69), far_y2),  # Centre back
+                            (int(w * 0.46), far_y1, int(w * 0.84), far_y2),  # Centre-Right back
+                            (int(w * 0.62), far_y1, w,              far_y2),  # Far-Right back
                         ]
                         max_far_dim = 1920.0
                         interp_p3 = cv2.INTER_LANCZOS4
                         p3_scale_cap = 3.5
                     else:
                         far_sectors = [
-                            (0,             0, int(w * 0.55), far_h),
-                            (int(w * 0.25), 0, int(w * 0.75), far_h),
-                            (int(w * 0.45), 0, w,              far_h),
+                            (0,             far_y1, int(w * 0.55), far_y2),
+                            (int(w * 0.25), far_y1, int(w * 0.75), far_y2),
+                            (int(w * 0.45), far_y1, w,              far_y2),
                         ]
                         max_far_dim = 1280.0
                         interp_p3 = cv2.INTER_LANCZOS4
                         p3_scale_cap = 2.5
 
-                    self.detector.setScoreThreshold(0.26)
+                    self.detector.setScoreThreshold(0.24)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1
@@ -263,31 +266,66 @@ class VisionEngine:
                                 all_detected_faces.append(f_mapped)
 
                 # -------------------------------------------------------------------
-                # PASS 4 - Ultra Back-Row Zoom (top 32% - distant rear seating)
+                # PASS 4 - Mid-Distant Seating Band (Rows 3-6, y: 28% to 76%)
+                # Captures middle-distance students that sit below the upper band
                 # -------------------------------------------------------------------
-                ultra_h = int(seating_h * 0.32)
+                mid_y1 = int(h * 0.28)
+                mid_y2 = int(h * 0.76)
+                mid_h = mid_y2 - mid_y1
+                if mid_h > 35 and not _IS_RENDER:
+                    mid_sectors = [
+                        (0,             mid_y1, int(w * 0.38), mid_y2),
+                        (int(w * 0.16), mid_y1, int(w * 0.54), mid_y2),
+                        (int(w * 0.31), mid_y1, int(w * 0.69), mid_y2),
+                        (int(w * 0.46), mid_y1, int(w * 0.84), mid_y2),
+                        (int(w * 0.62), mid_y1, w,              mid_y2),
+                    ]
+                    self.detector.setScoreThreshold(0.24)
+                    for mx1, my1, mx2, my2 in mid_sectors:
+                        m_crop = img_bgr[my1:my2, mx1:mx2]
+                        mw, mh = mx2 - mx1, my2 - my1
+                        if mw < 30 or mh < 30:
+                            continue
+                        scale_mid = min(3.0, 1920.0 / max(mw, 1))
+                        target_mw = int(mw * scale_mid)
+                        target_mh = int(mh * scale_mid)
+                        m_enh = self.enhance_contrast(m_crop)
+                        zoomed_mid = cv2.resize(m_enh, (target_mw, target_mh), interpolation=cv2.INTER_LANCZOS4)
+                        self.detector.setInputSize((target_mw, target_mh))
+                        _, mid_faces = self.detector.detect(zoomed_mid)
+                        if mid_faces is not None and len(mid_faces) > 0:
+                            for f in mid_faces:
+                                f_mapped = f.copy()
+                                f_mapped[0] = (f[0] / scale_mid) + mx1
+                                f_mapped[1] = (f[1] / scale_mid) + my1
+                                f_mapped[2] = f[2] / scale_mid
+                                f_mapped[3] = f[3] / scale_mid
+                                for lm in range(4, 14, 2):
+                                    f_mapped[lm] = (f[lm] / scale_mid) + mx1
+                                    f_mapped[lm + 1] = (f[lm + 1] / scale_mid) + my1
+                                all_detected_faces.append(f_mapped)
+
+                # -------------------------------------------------------------------
+                # PASS 5 - Ultra Far-Bench Micro-Tiles (tiny 10-18px faces, y: 12% to 55%)
+                # -------------------------------------------------------------------
+                ultra_y1 = int(h * 0.12)
+                ultra_y2 = int(h * 0.55)
+                ultra_h = ultra_y2 - ultra_y1
                 if ENABLE_PASS4 and ultra_h > 25:
-                    if w >= 1200:
-                        ultra_sectors = [
-                            (0,             0, int(w * 0.36), ultra_h),
-                            (int(w * 0.18), 0, int(w * 0.54), ultra_h),
-                            (int(w * 0.32), 0, int(w * 0.68), ultra_h),
-                            (int(w * 0.46), 0, int(w * 0.82), ultra_h),
-                            (int(w * 0.64), 0, w,              ultra_h),
-                        ]
-                    else:
-                        ultra_sectors = [
-                            (0,             0, int(w * 0.55), ultra_h),
-                            (int(w * 0.25), 0, int(w * 0.75), ultra_h),
-                            (int(w * 0.45), 0, w,              ultra_h),
-                        ]
-                    self.detector.setScoreThreshold(0.25)
+                    ultra_sectors = [
+                        (0,             ultra_y1, int(w * 0.28), ultra_y2),
+                        (int(w * 0.18), ultra_y1, int(w * 0.46), ultra_y2),
+                        (int(w * 0.36), ultra_y1, int(w * 0.64), ultra_y2),
+                        (int(w * 0.54), ultra_y1, int(w * 0.82), ultra_y2),
+                        (int(w * 0.72), ultra_y1, w,              ultra_y2),
+                    ]
+                    self.detector.setScoreThreshold(0.22)
                     for ux1, uy1, ux2, uy2 in ultra_sectors:
                         u_crop = img_bgr[uy1:uy2, ux1:ux2]
                         uw, uh = ux2 - ux1, uy2 - uy1
-                        if uw < 24 or uh < 24:
+                        if uw < 20 or uh < 20:
                             continue
-                        scale_ultra = min(3.5, 1920.0 / max(uw, 1))
+                        scale_ultra = min(4.0, 1920.0 / max(uw, 1))
                         target_uw = min(int(uw * scale_ultra), 1920)
                         target_uh = min(int(uh * scale_ultra), 1920)
                         u_enh = self.enhance_contrast(u_crop)
@@ -329,18 +367,27 @@ class VisionEngine:
         valid_faces = []
         for f in all_detected_faces:
             fw, fh = f[2], f[3]
-            # Minimum dimension: allow down to MIN_FACE_DIMENSION (18x18) for long-sight classroom back rows
+            # Minimum dimension: reject sub-pixel noise blobs under MIN_FACE_DIMENSION (20x20)
             if fw < MIN_FACE_DIMENSION or fh < MIN_FACE_DIMENSION:
                 continue
-            # Aspect ratio filtering: human faces in classroom perspective have aspect between 0.60 and 2.0
+            # Aspect ratio filtering: human faces in classroom perspective have aspect between 0.55 and 2.0
             aspect = float(fh) / max(float(fw), 1.0)
-            if aspect < 0.60 or aspect > 2.0:
+            if aspect < 0.55 or aspect > 2.0:
                 continue
-            # Landmark integrity check: eyes must be above mouth
+            # Anti-Fluke Landmark integrity check for all detected faces:
             if len(f) >= 14:
+                # 1. Left and right eye must have sufficient horizontal separation
+                dx_eyes = abs(f[6] - f[4])
+                if dx_eyes < 2.5:
+                    continue
+                # 2. Eyes must be above mouth
                 eye_y = min(f[5], f[7])
                 mouth_y = max(f[11], f[13])
-                if mouth_y < eye_y:
+                if mouth_y < eye_y - 0.5:
+                    continue
+                # 3. Nose position must be between eyes and mouth
+                nose_y = f[9]
+                if nose_y < eye_y - 2.0 or nose_y > mouth_y + 3.0:
                     continue
             valid_faces.append(f)
         return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.35)
@@ -439,11 +486,12 @@ class VisionEngine:
                 with self._model_lock:
                     blurred = cv2.GaussianBlur(aligned_face, (0, 0), sigmaX=1.5)
                     sharp_aligned = cv2.addWeighted(aligned_face, 1.4, blurred, -0.4, 0)
+                    sharp_aligned = self.enhance_contrast(sharp_aligned)
                     feat_sharp = self.recognizer.feature(sharp_aligned).flatten().astype(np.float32)
                     n_s = np.linalg.norm(feat_sharp)
                     if n_s > 0:
                         feat_sharp /= n_s
-                    feat_flat = 0.70 * feat_flat + 0.30 * feat_sharp
+                    feat_flat = 0.65 * feat_flat + 0.35 * feat_sharp
                     n = np.linalg.norm(feat_flat)
                     if n > 0:
                         feat_flat /= n
@@ -537,17 +585,23 @@ class VisionEngine:
             pass
 
         # 7. Distance-Adapted Multi-Scale Profiles (Simulated Classroom Long-Sight Optics)
-        # Enables distant back-row faces (20-40px) to match enrolled portrait with high confidence
+        # Enables distant back-row faces (26-48px) to match enrolled portrait with exact precision
         try:
-            # Mid-distance simulated optical scale (36x36 downscale + Lanczos restoration)
-            down_mid = cv2.resize(aligned_face, (36, 36), interpolation=cv2.INTER_AREA)
+            # Mid-distance simulated optical scale (48x48 downscale + Lanczos restoration + unsharp sharpening)
+            down_mid = cv2.resize(aligned_face, (48, 48), interpolation=cv2.INTER_AREA)
             up_mid = cv2.resize(down_mid, (112, 112), interpolation=cv2.INTER_LANCZOS4)
-            templates.append(_get_feat(up_mid))  # Template 7: Mid-Distance Optical Scale
+            templates.append(_get_feat(self.sharpen_small_crop(up_mid)))  # Template 7: Mid-Distance Optical Scale
 
-            # Far-distance / long-sight simulated optical scale (24x24 downscale + Lanczos restoration)
-            down_far = cv2.resize(aligned_face, (24, 24), interpolation=cv2.INTER_AREA)
-            up_far = cv2.resize(down_far, (112, 112), interpolation=cv2.INTER_LANCZOS4)
-            templates.append(_get_feat(up_far))  # Template 8: Far-Distance Optical Scale
+            # Distant simulated optical scale (36x36 downscale + Lanczos restoration + unsharp sharpening)
+            down_dist = cv2.resize(aligned_face, (36, 36), interpolation=cv2.INTER_AREA)
+            up_dist = cv2.resize(down_dist, (112, 112), interpolation=cv2.INTER_LANCZOS4)
+            templates.append(_get_feat(self.sharpen_small_crop(up_dist)))  # Template 8: Distant Optical Scale
+
+            # Long-distance simulated optical scale (28x28 downscale + Lanczos restoration + unsharp sharpening)
+            # Crucial for matching rear rows 7-10 in deep classrooms with high discriminative margin
+            down_long = cv2.resize(aligned_face, (28, 28), interpolation=cv2.INTER_AREA)
+            up_long = cv2.resize(down_long, (112, 112), interpolation=cv2.INTER_LANCZOS4)
+            templates.append(_get_feat(self.sharpen_small_crop(up_long)))  # Template 9: 28px Long-Distance Optical Scale
         except Exception:
             pass
 
@@ -557,7 +611,7 @@ class VisionEngine:
             n_c = np.linalg.norm(centroid)
             if n_c > 0:
                 centroid /= n_c
-            templates.append(centroid)  # Template 9: Centroid Prototype
+            templates.append(centroid)  # Template 10: Centroid Prototype
 
         return templates
 

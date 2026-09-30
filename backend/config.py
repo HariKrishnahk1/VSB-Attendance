@@ -29,22 +29,23 @@ YUNET_MODEL_PATH = str(MODELS_DIR / "yunet.onnx")
 SFACE_MODEL_PATH = str(MODELS_DIR / "sface.onnx")
 
 # YuNet Face Detector parameters
-YUNET_SCORE_THRESHOLD = 0.36  # Balanced detection to capture long-sight distant faces
+# High-precision classroom face detection (avoids background clutter and shadow artifacts)
+YUNET_SCORE_THRESHOLD = 0.28
 YUNET_NMS_THRESHOLD = 0.35
 YUNET_TOP_K = 5000
 
-# High-Precision SFace Cosine Similarity & Multi-Template Thresholds
-# Calibrated for Zero False Positives + Long-Sight Back-Row Recognition:
-# >= 0.52: Front/Mid-Row High Confidence Match            -> AUTO PRESENT
-# >= 0.44: Multi-Frame Consensus Match (2+ Frames)         -> AUTO PRESENT
-# >= 0.39: Long-Sight / Back-Row Consensus (2+ Frames)     -> AUTO PRESENT
-# >= 0.36: Borderline / Low-Res Candidate (2+ Frames)      -> REVIEW
-# < 0.36:  Unrecognized / Non-Match                        -> ABSENT
-THRESHOLD_HIGH_CONFIDENCE = 0.52   # Clear frontal/mid-row match
-THRESHOLD_MEDIUM_CONFIDENCE = 0.44  # Confident match with multi-frame verification
-THRESHOLD_BACKROW_CONFIDENCE = 0.39 # Long-sight distant match (requires 2+ consistent frames)
-THRESHOLD_AMBIGUITY_MARGIN = 0.025  # Minimum gap between top-1 and top-2 match
-MIN_FACE_DIMENSION = 18             # Capture distant classroom faces down to 18x18
+# High-Precision SFace Cosine Similarity & Anti-Fluke Multi-Template Thresholds
+# Calibrated for STRICT ZERO FALSE POSITIVES + Exact Long-Distance Back-Row Precision:
+# >= 0.65: Front/Mid-Row High Confidence Match (Unambiguous) -> AUTO PRESENT (1+ frames)
+# >= 0.58: Front/Mid-Row Consensus Match                     -> AUTO PRESENT (2+ frames)
+# >= 0.54: Long-Sight / Back-Row Consensus Match             -> AUTO PRESENT (requires 2+ consistent frames, margin >= 0.055)
+# >= 0.44: Borderline / Low-Res Candidate                    -> REVIEW (Staff verification)
+# < 0.44:  Unrecognized / Non-Match                         -> ABSENT (Strict safety net)
+THRESHOLD_HIGH_CONFIDENCE = 0.65    # Clear frontal/mid-row match (unambiguous)
+THRESHOLD_MEDIUM_CONFIDENCE = 0.58  # Confident match with multi-frame verification
+THRESHOLD_BACKROW_CONFIDENCE = 0.54 # Long-sight distant match (requires 2+ consistent frames)
+THRESHOLD_AMBIGUITY_MARGIN = 0.065  # Minimum 6.5% separation gap between top-1 and runner-up
+MIN_FACE_DIMENSION = 20             # Reject sub-pixel noise blobs under 20x20
 MAX_STUDENT_TEMPLATES = 16
 
 

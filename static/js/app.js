@@ -445,13 +445,12 @@ async function initWebcam() {
   const statusText = document.getElementById('cameraStatusText');
 
   try {
-    // STAGE 1: Request optimal classroom camera resolution (Full HD 1080p).
-    // On Android 14 4K smartboards, 1080p provides sharp face data across all rows
-    // while keeping GPU video decode buffers lightweight and preventing UI stutter.
+    // STAGE 1: Request optimal classroom camera resolution (up to 2560x1440 / Full HD).
+    // Provides high facial pixel density across distant back-rows.
     const cameraConstraints = {
       video: {
-        width: { ideal: 1920, min: 1280 },
-        height: { ideal: 1080, min: 720 },
+        width: { ideal: 2560, min: 1280 },
+        height: { ideal: 1440, min: 720 },
         facingMode: 'environment',       // Prefer rear-facing / wide-angle smartboard camera
         focusMode: 'manual',             // Request manual focus lock immediately
         exposureMode: 'manual',          // Prevent auto-exposure hunting
@@ -467,7 +466,7 @@ async function initWebcam() {
       // Fallback: open with standard constraints then apply hardware lock
       console.warn('[Camera] Manual-focus constraint not accepted, falling back to basic open.');
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920, min: 1280 }, height: { ideal: 1080, min: 720 } }
+        video: { width: { ideal: 2560, min: 1280 }, height: { ideal: 1440, min: 720 } }
       });
     }
 
@@ -543,9 +542,9 @@ async function startSmartboardAttendance() {
     await assertCameraFocusLock(videoTrack);
   }
 
-  // Capture at Full HD (up to 1920x1080) for maximum facial pixel fidelity across all rows
-  const captureWidth = (video.videoWidth && video.videoWidth >= 1280) ? Math.min(1920, video.videoWidth) : 1920;
-  const captureHeight = (video.videoHeight && video.videoHeight >= 720) ? Math.min(1080, video.videoHeight) : 1080;
+  // Capture at up to QHD (2560x1440) or native video resolution for maximum facial pixel fidelity across all rows
+  const captureWidth = (video.videoWidth && video.videoWidth >= 1280) ? Math.min(2560, video.videoWidth) : (video.videoWidth || 1920);
+  const captureHeight = (video.videoHeight && video.videoHeight >= 720) ? Math.min(1440, video.videoHeight) : (video.videoHeight || 1080);
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;

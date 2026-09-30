@@ -8,8 +8,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from backend.config import (
     THRESHOLD_HIGH_CONFIDENCE, THRESHOLD_MEDIUM_CONFIDENCE,
-    THRESHOLD_AMBIGUITY_MARGIN, MAX_STUDENT_TEMPLATES,
-    REVIEW_CROPS_DIR
+    THRESHOLD_BACKROW_CONFIDENCE, THRESHOLD_AMBIGUITY_MARGIN,
+    MAX_STUDENT_TEMPLATES, REVIEW_CROPS_DIR
 )
 from backend.models import (
     Student, StudentFaceEmbedding, AttendanceSession,
@@ -182,7 +182,7 @@ def process_smartboard_session(
             face_meta.append({
                 "face_box": [int(x), int(y), int(w), int(h)],
                 "sharpness": local_sharpness,
-                "is_distant": (w < 90 or h < 90),  # 4K: mid-row faces are ~80-120px
+                "is_distant": (w < 70 or h < 70),  # Classroom distant back-row faces
                 "crop": crop,
                 "crop_url": None,
                 "emb": emb
@@ -243,16 +243,16 @@ def process_smartboard_session(
             margin = (match_score - runner_score) if len(sorted_indices) > 1 else match_score
             st_id = student_obj_ids[c1]
 
-            # Adaptive calibrated thresholds for zero false positives
-            if face_w < 50 or face_h < 50:
-                min_match_thresh = 0.44
-                min_margin_thresh = 0.030
-            elif face_w < 90 or face_h < 90:
-                min_match_thresh = 0.46
-                min_margin_thresh = 0.032
+            # Adaptive calibrated thresholds for zero false positives and distant long-sight recognition
+            if face_w < 45 or face_h < 45:
+                min_match_thresh = 0.36
+                min_margin_thresh = 0.020
+            elif face_w < 85 or face_h < 85:
+                min_match_thresh = 0.42
+                min_margin_thresh = 0.025
             else:
-                min_match_thresh = 0.48
-                min_margin_thresh = 0.035
+                min_match_thresh = 0.46
+                min_margin_thresh = 0.028
 
             is_valid_student = (match_score >= min_match_thresh and margin >= min_margin_thresh)
 
@@ -371,21 +371,21 @@ def process_smartboard_session(
         # -----------------------------------------------------------------------
         # ATTENDANCE DECISION LADDER (Zero False Positives Guaranteed)
         # -----------------------------------------------------------------------
-        # Tier 1 - Definitive Match: score >= 0.58, margin >= 0.040 (unambiguous genuine match, 1+ frames)
-        # Tier 2 - Multi-Frame Consensus: score >= 0.46, avg >= 0.43, margin >= 0.030, frame_hits >= 2
-        # Tier 3 - Distant Consensus: is_distant, score >= 0.44, avg >= 0.42, margin >= 0.030, frame_hits >= 3
+        # Tier 1 - Definitive Match: unambiguous genuine match, 1+ frames
+        # Tier 2 - Multi-Frame Consensus: confident front/mid match (2+ frames)
+        # Tier 3 - Distant / Long-Sight Consensus: back-row match (2+ frames)
         # Tier 4 - Review (Borderline / Single moderate hit): needs staff verification
         # Tier 5 - Absent: All others (guarantees absent students never marked present)
         # -----------------------------------------------------------------------
         is_present = (
-            (max_score >= 0.58 and max_margin >= 0.040 and frame_hits >= 1) or
-            (max_score >= 0.46 and avg_score >= 0.43 and max_margin >= 0.030 and frame_hits >= 2) or
-            (is_distant and max_score >= 0.44 and avg_score >= 0.42 and max_margin >= 0.030 and frame_hits >= 3)
+            (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= 0.032 and frame_hits >= 1) or
+            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and avg_score >= 0.40 and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 2) or
+            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and avg_score >= 0.37 and max_margin >= 0.020 and frame_hits >= 2)
         )
         is_review = (
             not is_present and (
-                (max_score >= 0.50 and max_margin >= 0.030 and frame_hits == 1) or
-                (max_score >= 0.42 and max_margin >= 0.025 and frame_hits >= 2)
+                (max_score >= 0.46 and max_margin >= 0.025 and frame_hits >= 1) or
+                (max_score >= 0.36 and max_margin >= 0.018 and frame_hits >= 2)
             )
         )
 

@@ -10,7 +10,8 @@ from pathlib import Path
 from backend.config import (
     YUNET_MODEL_PATH, SFACE_MODEL_PATH,
     STUDENT_PHOTOS_DIR, REVIEW_CROPS_DIR,
-    YUNET_SCORE_THRESHOLD, YUNET_NMS_THRESHOLD
+    YUNET_SCORE_THRESHOLD, YUNET_NMS_THRESHOLD,
+    MIN_FACE_DIMENSION
 )
 
 # Official OpenCV Pretrained ONNX Models
@@ -142,7 +143,7 @@ class VisionEngine:
             # -------------------------------------------------------------------
             # PASS 1 - Full-frame native scan
             # -------------------------------------------------------------------
-            pass1_thresh = 0.40 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
+            pass1_thresh = 0.32 if is_classroom else HIGH_DENSITY_SCORE_THRESHOLD
             self.detector.setScoreThreshold(pass1_thresh)
             self.detector.setInputSize((w, h))
             _, faces_main = self.detector.detect(img_bgr)
@@ -178,7 +179,7 @@ class VisionEngine:
                     interp_p2 = cv2.INTER_LANCZOS4
                     p2_scale_cap = 2.5
 
-                self.detector.setScoreThreshold(0.36)
+                self.detector.setScoreThreshold(0.28)
 
                 for sx1, sy1, sx2, sy2 in sectors:
                     tile_crop = img_bgr[sy1:sy2, sx1:sx2]
@@ -206,18 +207,16 @@ class VisionEngine:
 
                 # -------------------------------------------------------------------
                 # PASS 3 - Back-Row Far-Bench Band (top 52% of seating height)
-                # Only on high-resolution classroom wide frames (w >= 1600) to prevent
-                # magnifying webcam / low-res background noise.
+                # Scans all classroom frames (1080p, 720p, 4K) to detect distant students
                 # -------------------------------------------------------------------
-                is_wide_classroom = (w >= 1600 and h >= 900)
                 far_h = int(seating_h * 0.52)
-                if is_wide_classroom and far_h > 40:
+                if far_h > 35:
                     if _IS_RENDER:
                         far_sectors = [(0, 0, w, far_h)]
                         max_far_dim = 960.0
                         interp_p3 = cv2.INTER_LINEAR
                         p3_scale_cap = 1.8
-                    else:
+                    elif w >= 1200:
                         far_sectors = [
                             (0,             0, int(w * 0.40), far_h),   # Far-Left back
                             (int(w * 0.15), 0, int(w * 0.55), far_h),  # Centre-Left back
@@ -228,12 +227,21 @@ class VisionEngine:
                         max_far_dim = 1920.0
                         interp_p3 = cv2.INTER_LANCZOS4
                         p3_scale_cap = 3.5
+                    else:
+                        far_sectors = [
+                            (0,             0, int(w * 0.55), far_h),
+                            (int(w * 0.25), 0, int(w * 0.75), far_h),
+                            (int(w * 0.45), 0, w,              far_h),
+                        ]
+                        max_far_dim = 1280.0
+                        interp_p3 = cv2.INTER_LANCZOS4
+                        p3_scale_cap = 2.5
 
-                    self.detector.setScoreThreshold(0.35)
+                    self.detector.setScoreThreshold(0.26)
                     for fx1, fy1, fx2, fy2 in far_sectors:
                         far_crop = img_bgr[fy1:fy2, fx1:fx2]
                         fw, fh = fx2 - fx1, fy2 - fy1
-                        if fw < 40 or fh < 40:
+                        if fw < 30 or fh < 30:
                             continue
                         scale_far = min(p3_scale_cap, max_far_dim / max(fw, 1))
                         target_fw = int(fw * scale_far)
@@ -255,23 +263,29 @@ class VisionEngine:
                                 all_detected_faces.append(f_mapped)
 
                 # -------------------------------------------------------------------
-                # PASS 4 - Ultra Back-Row Zoom (top 32% - 4K smartboard specific)
-                # Only on high-resolution classroom wide frames (w >= 1600).
+                # PASS 4 - Ultra Back-Row Zoom (top 32% - distant rear seating)
                 # -------------------------------------------------------------------
                 ultra_h = int(seating_h * 0.32)
-                if is_wide_classroom and ENABLE_PASS4 and ultra_h > 30:
-                    ultra_sectors = [
-                        (0,             0, int(w * 0.36), ultra_h),
-                        (int(w * 0.18), 0, int(w * 0.54), ultra_h),
-                        (int(w * 0.32), 0, int(w * 0.68), ultra_h),
-                        (int(w * 0.46), 0, int(w * 0.82), ultra_h),
-                        (int(w * 0.64), 0, w,              ultra_h),
-                    ]
-                    self.detector.setScoreThreshold(0.34)
+                if ENABLE_PASS4 and ultra_h > 25:
+                    if w >= 1200:
+                        ultra_sectors = [
+                            (0,             0, int(w * 0.36), ultra_h),
+                            (int(w * 0.18), 0, int(w * 0.54), ultra_h),
+                            (int(w * 0.32), 0, int(w * 0.68), ultra_h),
+                            (int(w * 0.46), 0, int(w * 0.82), ultra_h),
+                            (int(w * 0.64), 0, w,              ultra_h),
+                        ]
+                    else:
+                        ultra_sectors = [
+                            (0,             0, int(w * 0.55), ultra_h),
+                            (int(w * 0.25), 0, int(w * 0.75), ultra_h),
+                            (int(w * 0.45), 0, w,              ultra_h),
+                        ]
+                    self.detector.setScoreThreshold(0.25)
                     for ux1, uy1, ux2, uy2 in ultra_sectors:
                         u_crop = img_bgr[uy1:uy2, ux1:ux2]
                         uw, uh = ux2 - ux1, uy2 - uy1
-                        if uw < 32 or uh < 32:
+                        if uw < 24 or uh < 24:
                             continue
                         scale_ultra = min(3.5, 1920.0 / max(uw, 1))
                         target_uw = min(int(uw * scale_ultra), 1920)
@@ -315,13 +329,12 @@ class VisionEngine:
         valid_faces = []
         for f in all_detected_faces:
             fw, fh = f[2], f[3]
-            # Minimum dimension: 36x36 pixels to preserve facial biometric fidelity
-            # Eliminates small noise artifacts, buttons, and background clutter
-            if fw < 36 or fh < 36:
+            # Minimum dimension: allow down to MIN_FACE_DIMENSION (18x18) for long-sight classroom back rows
+            if fw < MIN_FACE_DIMENSION or fh < MIN_FACE_DIMENSION:
                 continue
-            # Aspect ratio filtering: human faces in classroom perspective have aspect between 0.65 and 1.90
+            # Aspect ratio filtering: human faces in classroom perspective have aspect between 0.60 and 2.0
             aspect = float(fh) / max(float(fw), 1.0)
-            if aspect < 0.65 or aspect > 1.90:
+            if aspect < 0.60 or aspect > 2.0:
                 continue
             # Landmark integrity check: eyes must be above mouth
             if len(f) >= 14:
@@ -420,6 +433,23 @@ class VisionEngine:
         if norm > 0:
             feat_flat /= norm
 
+        # High-pass feature restoration for small/distant face crops (bw < 65 or bh < 65)
+        if (bw < 65 or bh < 65) and aligned_face is not None:
+            try:
+                with self._model_lock:
+                    blurred = cv2.GaussianBlur(aligned_face, (0, 0), sigmaX=1.5)
+                    sharp_aligned = cv2.addWeighted(aligned_face, 1.4, blurred, -0.4, 0)
+                    feat_sharp = self.recognizer.feature(sharp_aligned).flatten().astype(np.float32)
+                    n_s = np.linalg.norm(feat_sharp)
+                    if n_s > 0:
+                        feat_sharp /= n_s
+                    feat_flat = 0.70 * feat_flat + 0.30 * feat_sharp
+                    n = np.linalg.norm(feat_flat)
+                    if n > 0:
+                        feat_flat /= n
+            except Exception:
+                pass
+
         if not use_tta or aligned_face is None:
             return feat_flat
 
@@ -506,13 +536,28 @@ class VisionEngine:
         except Exception:
             pass
 
-        # 7. Student Master Centroid Vector (Normalized Mean of all genuine templates)
+        # 7. Distance-Adapted Multi-Scale Profiles (Simulated Classroom Long-Sight Optics)
+        # Enables distant back-row faces (20-40px) to match enrolled portrait with high confidence
+        try:
+            # Mid-distance simulated optical scale (36x36 downscale + Lanczos restoration)
+            down_mid = cv2.resize(aligned_face, (36, 36), interpolation=cv2.INTER_AREA)
+            up_mid = cv2.resize(down_mid, (112, 112), interpolation=cv2.INTER_LANCZOS4)
+            templates.append(_get_feat(up_mid))  # Template 7: Mid-Distance Optical Scale
+
+            # Far-distance / long-sight simulated optical scale (24x24 downscale + Lanczos restoration)
+            down_far = cv2.resize(aligned_face, (24, 24), interpolation=cv2.INTER_AREA)
+            up_far = cv2.resize(down_far, (112, 112), interpolation=cv2.INTER_LANCZOS4)
+            templates.append(_get_feat(up_far))  # Template 8: Far-Distance Optical Scale
+        except Exception:
+            pass
+
+        # 8. Student Master Centroid Vector (Normalized Mean of all genuine templates)
         if templates:
             centroid = np.mean(templates, axis=0)
             n_c = np.linalg.norm(centroid)
             if n_c > 0:
                 centroid /= n_c
-            templates.append(centroid)  # Template 7: Centroid Prototype
+            templates.append(centroid)  # Template 9: Centroid Prototype
 
         return templates
 

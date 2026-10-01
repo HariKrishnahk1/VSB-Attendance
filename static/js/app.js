@@ -445,28 +445,23 @@ async function initWebcam() {
   const statusText = document.getElementById('cameraStatusText');
 
   try {
-    // STAGE 1: Request optimal classroom camera resolution (up to 2560x1440 / Full HD).
-    // Provides high facial pixel density across distant back-rows.
+    // STAGE 1: Request optimal classroom camera resolution, supporting any camera
+    // from low-budget webcams (down to 240p/280p) up to Full HD & 4K smartboards.
     const cameraConstraints = {
       video: {
-        width: { ideal: 2560, min: 1280 },
-        height: { ideal: 1440, min: 720 },
-        facingMode: 'environment',       // Prefer rear-facing / wide-angle smartboard camera
-        focusMode: 'manual',             // Request manual focus lock immediately
-        exposureMode: 'manual',          // Prevent auto-exposure hunting
-        whiteBalanceMode: 'manual'       // Prevent white-balance shift during capture
+        width: { ideal: 2560, min: 320 },
+        height: { ideal: 1440, min: 240 },
+        facingMode: 'environment'        // Prefer rear-facing / wide-angle camera
       }
     };
 
     let stream;
     try {
-      // Attempt with manual focus constraints first
       stream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
     } catch (_constraintErr) {
-      // Fallback: open with standard constraints then apply hardware lock
-      console.warn('[Camera] Manual-focus constraint not accepted, falling back to basic open.');
+      console.warn('[Camera] Advanced constraints not accepted, falling back to basic camera open.');
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 2560, min: 1280 }, height: { ideal: 1440, min: 720 } }
+        video: true
       });
     }
 
@@ -542,9 +537,13 @@ async function startSmartboardAttendance() {
     await assertCameraFocusLock(videoTrack);
   }
 
-  // Capture at up to QHD (2560x1440) or native video resolution for maximum facial pixel fidelity across all rows
-  const captureWidth = (video.videoWidth && video.videoWidth >= 1280) ? Math.min(2560, video.videoWidth) : (video.videoWidth || 1920);
-  const captureHeight = (video.videoHeight && video.videoHeight >= 720) ? Math.min(1440, video.videoHeight) : (video.videoHeight || 1080);
+  // Capture at native video resolution (supports 240p, 280p, 360p, 480p, 720p, 1080p, or up to 2560px QHD)
+  const maxDim = 2560;
+  const vidW = video.videoWidth || 640;
+  const vidH = video.videoHeight || 480;
+  const scale = vidW > maxDim ? (maxDim / vidW) : 1.0;
+  const captureWidth = Math.round(vidW * scale);
+  const captureHeight = Math.round(vidH * scale);
   const canvas = document.createElement('canvas');
   canvas.width = captureWidth;
   canvas.height = captureHeight;

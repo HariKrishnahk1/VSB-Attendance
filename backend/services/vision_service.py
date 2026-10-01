@@ -34,9 +34,9 @@ _IS_RENDER = (
     os.environ.get("RENDER_SERVICE_ID") is not None or
     os.environ.get("RENDER_INSTANCE_ID") is not None
 )
-MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 1440 if _IS_RENDER else 2560))
-MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 8 if _IS_RENDER else 20))
-ENABLE_PASS4     = os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes")
+MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 1120 if _IS_RENDER else 2560))
+MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 3 if _IS_RENDER else 16))
+ENABLE_PASS4     = (not _IS_RENDER) and (os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes"))
 print(f"[VisionEngine] Environment: {'Render Cloud (memory/CPU-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
 print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
 
@@ -178,13 +178,12 @@ class VisionEngine:
                 # -------------------------------------------------------------------
                 if _IS_RENDER:
                     sectors = [
-                        (0,              seating_top, int(w * 0.55), seating_bottom),
-                        (int(w * 0.25),  seating_top, int(w * 0.75), seating_bottom),
-                        (int(w * 0.45),  seating_top, w,              seating_bottom),
+                        (0,              seating_top, int(w * 0.60), seating_bottom),
+                        (int(w * 0.40),  seating_top, w,              seating_bottom),
                     ]
-                    max_tile_dim = 1440.0
-                    interp_p2 = cv2.INTER_LANCZOS4
-                    p2_scale_cap = 2.2
+                    max_tile_dim = 960.0
+                    interp_p2 = cv2.INTER_LINEAR
+                    p2_scale_cap = 1.8
                 else:
                     sectors = [
                         (0,              seating_top, int(w * 0.42), seating_bottom),   # Far Left
@@ -233,13 +232,12 @@ class VisionEngine:
                 if far_h > 35:
                     if _IS_RENDER:
                         far_sectors = [
-                            (0,             far_y1, int(w * 0.45), far_y2),   # Far-Left back
-                            (int(w * 0.28), far_y1, int(w * 0.72), far_y2),   # Centre back
-                            (int(w * 0.55), far_y1, w,              far_y2),   # Far-Right back
+                            (0,             far_y1, int(w * 0.58), far_y2),
+                            (int(w * 0.42), far_y1, w,              far_y2),
                         ]
-                        max_far_dim = 1440.0
-                        interp_p3 = cv2.INTER_LANCZOS4
-                        p3_scale_cap = 2.6
+                        max_far_dim = 960.0
+                        interp_p3 = cv2.INTER_LINEAR
+                        p3_scale_cap = 2.2
                     elif w >= 1200:
                         far_sectors = [
                             (0,             far_y1, int(w * 0.38), far_y2),   # Far-Left back
@@ -293,7 +291,7 @@ class VisionEngine:
                 mid_y1 = int(h * 0.28)
                 mid_y2 = int(h * 0.76)
                 mid_h = mid_y2 - mid_y1
-                if mid_h > 35:
+                if mid_h > 35 and ENABLE_PASS4:
                     if _IS_RENDER:
                         mid_sectors = [
                             (0,             mid_y1, int(w * 0.55), mid_y2),
@@ -729,8 +727,8 @@ class VisionEngine:
             max_keyframes = MAX_KEYFRAMES
 
         # Uniformly span the entire 4-5 second video timeline
-        if _IS_RENDER and len(base64_frames) > 12:
-            indices = np.linspace(0, len(base64_frames) - 1, 12, dtype=int)
+        if _IS_RENDER and len(base64_frames) > 6:
+            indices = np.linspace(0, len(base64_frames) - 1, 6, dtype=int)
             base64_frames = [base64_frames[i] for i in indices]
         elif len(base64_frames) > 24:
             indices = np.linspace(0, len(base64_frames) - 1, 24, dtype=int)

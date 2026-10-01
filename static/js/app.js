@@ -526,8 +526,8 @@ async function startSmartboardAttendance() {
     await assertCameraFocusLock(videoTrack);
   }
 
-  // Capture at native video resolution (supports 240p, 280p, 360p, 480p, 720p, 1080p, or up to 2560px QHD)
-  const maxDim = 2560;
+  // Capture at native video resolution (supports 240p, 280p, 360p, 480p, 720p, up to 1080p Full HD)
+  const maxDim = 1920;
   const vidW = video.videoWidth || 640;
   const vidH = video.videoHeight || 480;
   const scale = vidW > maxDim ? (maxDim / vidW) : 1.0;
@@ -550,7 +550,7 @@ async function startSmartboardAttendance() {
   const capturedFrames = [];
   // Capture 12-14 sharp keyframes across 5-second video sweep (covering all classroom rows from left to right)
   const captureDurationMs = 5000;
-  const intervalMs = 380;
+  const intervalMs = 500;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
@@ -568,7 +568,7 @@ async function startSmartboardAttendance() {
 
     if (state.webcamStream && video.readyState >= 2) {
       ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.88));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.82));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, captureWidth, captureHeight);

@@ -212,6 +212,7 @@ def process_smartboard_session(
 
         for f_idx, emb in enumerate(face_embs):
             scores_array = vision.compare_embeddings_batch(emb, ref_matrix)
+            f_is_dist = face_meta[f_idx]["is_distant"]
             for s_col, s_id in enumerate(student_obj_ids):
                 idxs = student_template_indices.get(s_id)
                 if idxs is not None and len(idxs) > 0:
@@ -222,7 +223,12 @@ def process_smartboard_session(
                     top_3 = float(s_sorted[2]) if len(s_sorted) > 2 else top_2
                     # Anti-Fluke Multi-Template Consensus:
                     # Strongly rewards genuine multi-profile match while penalizing 1-template impostor spikes
-                    comp_score = 0.55 * top_1 + 0.30 * top_2 + 0.15 * top_3
+                    if f_is_dist:
+                        # Distant faces match the low-res optical templates best (Templates 7, 8, 9, 10).
+                        # Blending equally with studio templates dilutes their score.
+                        comp_score = max(top_1 * 0.95, 0.65 * top_1 + 0.25 * top_2 + 0.10 * top_3)
+                    else:
+                        comp_score = 0.55 * top_1 + 0.30 * top_2 + 0.15 * top_3
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Global Greedy 1-to-1 Disambiguation
@@ -245,8 +251,8 @@ def process_smartboard_session(
 
             # Calibrated candidate thresholds: guarantees zero false positive matches
             if face_w < 60 or face_h < 60:
-                min_match_thresh = 0.50
-                min_margin_thresh = 0.045
+                min_match_thresh = 0.48
+                min_margin_thresh = 0.040
             elif face_w < 95 or face_h < 95:
                 min_match_thresh = 0.54
                 min_margin_thresh = 0.055
@@ -416,18 +422,19 @@ def process_smartboard_session(
         # -----------------------------------------------------------------------
         # Tier 1 - Unambiguous Front/Mid-Row Match (>= 0.58, margin >= 0.065, 1+ frames) -> AUTO PRESENT
         # Tier 2 - Multi-Frame Video Sweep Consensus (>= 0.52, margin >= 0.050, 2+ frames) -> AUTO PRESENT
-        # Tier 3 - Distant / Back-Row Match (is_distant, >= 0.50, margin >= 0.045, 2+ frames) -> AUTO PRESENT
-        # Tier 4 - Review (Borderline candidate >= 0.44, margin >= 0.030, 1+ frames): needs staff verification
+        # Tier 3 - Distant / Back-Row Match (is_distant, >= 0.48, margin >= 0.040, 1+ frames OR >= 0.46, margin >= 0.030, 2+ frames) -> AUTO PRESENT
+        # Tier 4 - Review (Borderline candidate >= 0.44, margin >= 0.025, 1+ frames): needs staff verification
         # Tier 5 - Absent: All others (guarantees absent students NEVER marked present)
         # -----------------------------------------------------------------------
         is_present = (
             (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 1) or
             (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.050 and frame_hits >= 2) or
-            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.045 and frame_hits >= 2)
+            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.040 and frame_hits >= 1) or
+            (is_distant and max_score >= 0.46 and max_margin >= 0.030 and frame_hits >= 2)
         )
         is_review = (
             not is_present and (
-                (max_score >= 0.44 and max_margin >= 0.030 and frame_hits >= 1)
+                (max_score >= 0.44 and max_margin >= 0.025 and frame_hits >= 1)
             )
         )
 

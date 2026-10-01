@@ -34,9 +34,9 @@ _IS_RENDER = (
     os.environ.get("RENDER_SERVICE_ID") is not None or
     os.environ.get("RENDER_INSTANCE_ID") is not None
 )
-MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 960 if _IS_RENDER else 2560))
-MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 6 if _IS_RENDER else 20))
-ENABLE_PASS4     = (not _IS_RENDER) and (os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes"))
+MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 1440 if _IS_RENDER else 2560))
+MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 8 if _IS_RENDER else 20))
+ENABLE_PASS4     = os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes")
 print(f"[VisionEngine] Environment: {'Render Cloud (memory/CPU-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
 print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
 
@@ -178,12 +178,13 @@ class VisionEngine:
                 # -------------------------------------------------------------------
                 if _IS_RENDER:
                     sectors = [
-                        (0,              seating_top, int(w * 0.60), seating_bottom),
-                        (int(w * 0.40),  seating_top, w,              seating_bottom),
+                        (0,              seating_top, int(w * 0.55), seating_bottom),
+                        (int(w * 0.25),  seating_top, int(w * 0.75), seating_bottom),
+                        (int(w * 0.45),  seating_top, w,              seating_bottom),
                     ]
-                    max_tile_dim = 960.0
-                    interp_p2 = cv2.INTER_LINEAR
-                    p2_scale_cap = 1.8
+                    max_tile_dim = 1440.0
+                    interp_p2 = cv2.INTER_LANCZOS4
+                    p2_scale_cap = 2.2
                 else:
                     sectors = [
                         (0,              seating_top, int(w * 0.42), seating_bottom),   # Far Left
@@ -231,10 +232,14 @@ class VisionEngine:
                 far_h = far_y2 - far_y1
                 if far_h > 35:
                     if _IS_RENDER:
-                        far_sectors = [(0, far_y1, w, far_y2)]
-                        max_far_dim = 960.0
-                        interp_p3 = cv2.INTER_LINEAR
-                        p3_scale_cap = 1.8
+                        far_sectors = [
+                            (0,             far_y1, int(w * 0.45), far_y2),   # Far-Left back
+                            (int(w * 0.28), far_y1, int(w * 0.72), far_y2),   # Centre back
+                            (int(w * 0.55), far_y1, w,              far_y2),   # Far-Right back
+                        ]
+                        max_far_dim = 1440.0
+                        interp_p3 = cv2.INTER_LANCZOS4
+                        p3_scale_cap = 2.6
                     elif w >= 1200:
                         far_sectors = [
                             (0,             far_y1, int(w * 0.38), far_y2),   # Far-Left back
@@ -288,21 +293,31 @@ class VisionEngine:
                 mid_y1 = int(h * 0.28)
                 mid_y2 = int(h * 0.76)
                 mid_h = mid_y2 - mid_y1
-                if mid_h > 35 and not _IS_RENDER:
-                    mid_sectors = [
-                        (0,             mid_y1, int(w * 0.38), mid_y2),
-                        (int(w * 0.16), mid_y1, int(w * 0.54), mid_y2),
-                        (int(w * 0.31), mid_y1, int(w * 0.69), mid_y2),
-                        (int(w * 0.46), mid_y1, int(w * 0.84), mid_y2),
-                        (int(w * 0.62), mid_y1, w,              mid_y2),
-                    ]
+                if mid_h > 35:
+                    if _IS_RENDER:
+                        mid_sectors = [
+                            (0,             mid_y1, int(w * 0.55), mid_y2),
+                            (int(w * 0.45), mid_y1, w,              mid_y2),
+                        ]
+                        scale_cap_mid = 2.0
+                        max_mid_dim = 1280.0
+                    else:
+                        mid_sectors = [
+                            (0,             mid_y1, int(w * 0.38), mid_y2),
+                            (int(w * 0.16), mid_y1, int(w * 0.54), mid_y2),
+                            (int(w * 0.31), mid_y1, int(w * 0.69), mid_y2),
+                            (int(w * 0.46), mid_y1, int(w * 0.84), mid_y2),
+                            (int(w * 0.62), mid_y1, w,              mid_y2),
+                        ]
+                        scale_cap_mid = 3.0
+                        max_mid_dim = 1920.0
                     self.detector.setScoreThreshold(0.24)
                     for mx1, my1, mx2, my2 in mid_sectors:
                         m_crop = img_bgr[my1:my2, mx1:mx2]
                         mw, mh = mx2 - mx1, my2 - my1
                         if mw < 30 or mh < 30:
                             continue
-                        scale_mid = min(3.0, 1920.0 / max(mw, 1))
+                        scale_mid = min(scale_cap_mid, max_mid_dim / max(mw, 1))
                         target_mw = int(mw * scale_mid)
                         target_mh = int(mh * scale_mid)
                         m_enh = self.enhance_contrast(m_crop)
@@ -328,22 +343,33 @@ class VisionEngine:
                 ultra_y2 = int(h * 0.55)
                 ultra_h = ultra_y2 - ultra_y1
                 if ENABLE_PASS4 and ultra_h > 25:
-                    ultra_sectors = [
-                        (0,             ultra_y1, int(w * 0.28), ultra_y2),
-                        (int(w * 0.18), ultra_y1, int(w * 0.46), ultra_y2),
-                        (int(w * 0.36), ultra_y1, int(w * 0.64), ultra_y2),
-                        (int(w * 0.54), ultra_y1, int(w * 0.82), ultra_y2),
-                        (int(w * 0.72), ultra_y1, w,              ultra_y2),
-                    ]
+                    if _IS_RENDER:
+                        ultra_sectors = [
+                            (0,             ultra_y1, int(w * 0.38), ultra_y2),
+                            (int(w * 0.31), ultra_y1, int(w * 0.69), ultra_y2),
+                            (int(w * 0.62), ultra_y1, w,              ultra_y2),
+                        ]
+                        max_u_dim = 1280.0
+                        scale_cap_u = 3.0
+                    else:
+                        ultra_sectors = [
+                            (0,             ultra_y1, int(w * 0.28), ultra_y2),
+                            (int(w * 0.18), ultra_y1, int(w * 0.46), ultra_y2),
+                            (int(w * 0.36), ultra_y1, int(w * 0.64), ultra_y2),
+                            (int(w * 0.54), ultra_y1, int(w * 0.82), ultra_y2),
+                            (int(w * 0.72), ultra_y1, w,              ultra_y2),
+                        ]
+                        max_u_dim = 1920.0
+                        scale_cap_u = 4.0
                     self.detector.setScoreThreshold(0.22)
                     for ux1, uy1, ux2, uy2 in ultra_sectors:
                         u_crop = img_bgr[uy1:uy2, ux1:ux2]
                         uw, uh = ux2 - ux1, uy2 - uy1
                         if uw < 20 or uh < 20:
                             continue
-                        scale_ultra = min(4.0, 1920.0 / max(uw, 1))
-                        target_uw = min(int(uw * scale_ultra), 1920)
-                        target_uh = min(int(uh * scale_ultra), 1920)
+                        scale_ultra = min(scale_cap_u, max_u_dim / max(uw, 1))
+                        target_uw = min(int(uw * scale_ultra), int(max_u_dim))
+                        target_uh = min(int(uh * scale_ultra), int(max_u_dim))
                         u_enh = self.enhance_contrast(u_crop)
                         zoomed_ultra = cv2.resize(u_enh, (target_uw, target_uh), interpolation=cv2.INTER_LANCZOS4)
                         self.detector.setInputSize((target_uw, target_uh))
@@ -380,9 +406,8 @@ class VisionEngine:
                     f[lm + 1] *= inv
 
         # Validate facial geometry: size, aspect ratio, and landmark orientation
-        # On a 280p / 360p budget camera, genuine back-row faces are ~14-18px in native coordinates.
-        # On 1080p/4K cameras, background noise blobs under MIN_FACE_DIMENSION (20px) are rejected.
-        min_dim_thresh = 14 if min_dim < 480 else MIN_FACE_DIMENSION
+        # In classroom mode, genuine distant back-row faces are ~10-18px in native coordinates.
+        min_dim_thresh = 10 if is_classroom else (14 if min_dim < 480 else MIN_FACE_DIMENSION)
         valid_faces = []
         for f in all_detected_faces:
             fw, fh = f[2], f[3]
@@ -396,16 +421,17 @@ class VisionEngine:
             if len(f) >= 14:
                 # 1. Left and right eye must have sufficient horizontal separation
                 dx_eyes = abs(f[6] - f[4])
-                if dx_eyes < (1.8 if min_dim < 480 else 2.5):
+                min_eye_dist = 1.2 if (is_classroom or min_dim < 480) else 2.5
+                if dx_eyes < min_eye_dist:
                     continue
                 # 2. Eyes must be above mouth
                 eye_y = min(f[5], f[7])
                 mouth_y = max(f[11], f[13])
                 if mouth_y < eye_y - 0.5:
                     continue
-                # 3. Nose position must be between eyes and mouth
+                # 3. Nose position must be between eyes and mouth (with tolerance for perspective)
                 nose_y = f[9]
-                if nose_y < eye_y - 2.0 or nose_y > mouth_y + 3.0:
+                if nose_y < eye_y - 3.0 or nose_y > mouth_y + 4.0:
                     continue
             valid_faces.append(f)
         return self._suppress_duplicate_faces(valid_faces, iou_threshold=0.35)

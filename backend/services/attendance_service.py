@@ -223,12 +223,7 @@ def process_smartboard_session(
                     top_3 = float(s_sorted[2]) if len(s_sorted) > 2 else top_2
                     # Anti-Fluke Multi-Template Consensus:
                     # Strongly rewards genuine multi-profile match while penalizing 1-template impostor spikes
-                    if f_is_dist:
-                        # Distant faces match the low-res optical templates best (Templates 7, 8, 9, 10).
-                        # Blending equally with studio templates dilutes their score.
-                        comp_score = max(top_1 * 0.95, 0.65 * top_1 + 0.25 * top_2 + 0.10 * top_3)
-                    else:
-                        comp_score = 0.55 * top_1 + 0.30 * top_2 + 0.15 * top_3
+                    comp_score = max(top_1 * 0.95, 0.65 * top_1 + 0.25 * top_2 + 0.10 * top_3)
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Global Greedy 1-to-1 Disambiguation
@@ -251,14 +246,11 @@ def process_smartboard_session(
 
             # Calibrated candidate thresholds: guarantees zero false positive matches
             if face_w < 60 or face_h < 60:
+                min_match_thresh = 0.46
+                min_margin_thresh = 0.035
+            else:
                 min_match_thresh = 0.48
                 min_margin_thresh = 0.040
-            elif face_w < 95 or face_h < 95:
-                min_match_thresh = 0.54
-                min_margin_thresh = 0.055
-            else:
-                min_match_thresh = 0.58
-                min_margin_thresh = 0.065
 
             face_proposals.append({
                 "face_idx": r,
@@ -428,9 +420,9 @@ def process_smartboard_session(
         # -----------------------------------------------------------------------
         is_present = (
             (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 1) or
-            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.050 and frame_hits >= 2) or
+            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.040 and frame_hits >= 2) or
             (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.040 and frame_hits >= 1) or
-            (is_distant and max_score >= 0.46 and max_margin >= 0.030 and frame_hits >= 2)
+            (is_distant and max_score >= 0.46 and max_margin >= 0.035 and frame_hits >= 2)
         )
         is_review = (
             not is_present and (

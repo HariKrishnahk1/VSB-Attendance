@@ -41,10 +41,10 @@ YUNET_TOP_K = 5000
 # >= 0.50: Long-Sight / Back-Row Consensus                         -> AUTO PRESENT (2+ frames)
 # >= 0.44: Borderline / Low-Res Candidate                          -> REVIEW (Staff verification)
 # < 0.44:  Unrecognized / Non-Match                               -> ABSENT (Strict safety net)
-THRESHOLD_HIGH_CONFIDENCE = 0.58     # Clear frontal/mid-row match (unambiguous, >=85% confidence)
-THRESHOLD_MEDIUM_CONFIDENCE = 0.52   # Confident match with video sweep consensus (2+ frames)
+THRESHOLD_HIGH_CONFIDENCE = 0.52     # Clear frontal/mid-row match (unambiguous, >=85% confidence)
+THRESHOLD_MEDIUM_CONFIDENCE = 0.48   # Confident match with video sweep consensus (2+ frames)
 THRESHOLD_BACKROW_CONFIDENCE = 0.48  # Long-sight distant match (unambiguous back-row biometric match)
-THRESHOLD_AMBIGUITY_MARGIN = 0.065   # Strict 6.5% separation margin gap from runner-up
+THRESHOLD_AMBIGUITY_MARGIN = 0.050   # 5% separation margin gap from runner-up
 MIN_FACE_DIMENSION = 12              # Reject sub-pixel noise blobs under 12x12 (allows distant 12-25px faces)
 MAX_STUDENT_TEMPLATES = 16
 

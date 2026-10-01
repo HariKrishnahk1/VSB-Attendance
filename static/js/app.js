@@ -372,7 +372,7 @@ async function initSmartboardView() {
   }
 }
 
-// Focus Lock & Camera Stabilization Engine
+// Camera Stabilization & Continuous Focus Engine
 async function assertCameraFocusLock(videoTrack) {
   if (!videoTrack || typeof videoTrack.getCapabilities !== 'function') return false;
   try {
@@ -380,28 +380,20 @@ async function assertCameraFocusLock(videoTrack) {
     const advancedConstraints = {};
     let lockApplied = false;
 
-    // Step 1: Force camera OUT of autofocus (prioritize 'manual' > 'fixed' > 'none')
-    if (capabilities.focusMode) {
-      const bestMode = ['manual', 'fixed', 'none'].find(m => capabilities.focusMode.includes(m));
-      if (bestMode) {
-        advancedConstraints.focusMode = bestMode;
-        lockApplied = true;
-      }
-    }
-
-    // Step 2: Auto-lock focal distance to hyperfocal depth (clear across entire classroom)
-    if (capabilities.focusDistance) {
-      const maxDist = capabilities.focusDistance.max !== undefined ? capabilities.focusDistance.max : 1.0;
-      advancedConstraints.focusDistance = maxDist;
+    // Prefer continuous autofocus to keep all classroom rows sharp
+    if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+      advancedConstraints.focusMode = 'continuous';
       lockApplied = true;
     }
-
-    // Step 3: Lock exposure and white balance to eliminate auto-gain re-hunting
-    if (capabilities.exposureMode && capabilities.exposureMode.includes('manual')) {
-      advancedConstraints.exposureMode = 'manual';
+    // Prefer continuous auto-exposure
+    if (capabilities.exposureMode && capabilities.exposureMode.includes('continuous')) {
+      advancedConstraints.exposureMode = 'continuous';
+      lockApplied = true;
     }
-    if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('manual')) {
-      advancedConstraints.whiteBalanceMode = 'manual';
+    // Prefer continuous auto-white-balance
+    if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('continuous')) {
+      advancedConstraints.whiteBalanceMode = 'continuous';
+      lockApplied = true;
     }
 
     if (lockApplied) {
@@ -409,7 +401,7 @@ async function assertCameraFocusLock(videoTrack) {
       return true;
     }
   } catch (err) {
-    console.warn('[Camera] Focus lock assertion warning:', err);
+    console.warn('[Camera] Focus/exposure setup warning:', err);
   }
   return false;
 }
@@ -525,14 +517,11 @@ async function startSmartboardAttendance() {
   const statusText = document.getElementById('cameraStatusText');
 
   pill.className = 'camera-status-pill recording';
-  statusText.innerText = '🔒 Disabling Autofocus — Auto-Locking Focal Plane...';
+  statusText.innerText = '📹 Optimizing camera focus & exposure...';
 
   const video = document.getElementById('webcamVideo');
   const videoTrack = state.webcamStream ? state.webcamStream.getVideoTracks()[0] : null;
 
-  // STEP 1: FORCE CAMERA OUT OF AUTOFOCUS IMMEDIATELY (single shot — no polling watchdog)
-  // The 300ms watchdog was causing severe jank on Android smartboards.
-  // A single focus-lock call at the start is sufficient; the lock is maintained by hardware.
   if (videoTrack) {
     await assertCameraFocusLock(videoTrack);
   }
@@ -550,18 +539,18 @@ async function startSmartboardAttendance() {
   // Use willReadFrequently for faster getImageData on Android GPU
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-  // STEP 2: Brief stabilization — let camera exposure and focus settle after lock
+  // STEP 2: Brief stabilization — let camera exposure settle
   if (state.webcamStream && video.readyState === 4) {
     ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
   }
 
   statusText.innerHTML = '📹 <strong>Starting 5-Second Video Sweep...</strong>';
 
   const capturedFrames = [];
-  // Capture 20 keyframes across 5-second video sweep (covering all classroom rows from left to right)
+  // Capture 12-14 sharp keyframes across 5-second video sweep (covering all classroom rows from left to right)
   const captureDurationMs = 5000;
-  const intervalMs = 250;
+  const intervalMs = 380;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
@@ -579,7 +568,7 @@ async function startSmartboardAttendance() {
 
     if (state.webcamStream && video.readyState >= 2) {
       ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.88));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, captureWidth, captureHeight);

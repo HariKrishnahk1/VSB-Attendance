@@ -35,7 +35,7 @@ _IS_RENDER = (
     os.environ.get("RENDER_INSTANCE_ID") is not None
 )
 MAX_FRAME_WIDTH  = int(os.environ.get("MAX_FRAME_WIDTH", 960 if _IS_RENDER else 2560))
-MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 4 if _IS_RENDER else 24))
+MAX_KEYFRAMES    = int(os.environ.get("MAX_KEYFRAMES", 6 if _IS_RENDER else 20))
 ENABLE_PASS4     = (not _IS_RENDER) and (os.environ.get("ENABLE_PASS4", "true").lower() in ("1", "true", "yes"))
 print(f"[VisionEngine] Environment: {'Render Cloud (memory/CPU-safe mode)' if _IS_RENDER else 'Local/Smartboard (full 4K pipeline)'}")
 print(f"[VisionEngine] MAX_FRAME_WIDTH={MAX_FRAME_WIDTH}  MAX_KEYFRAMES={MAX_KEYFRAMES}  PASS4={'ON' if ENABLE_PASS4 else 'OFF'}")
@@ -702,9 +702,13 @@ class VisionEngine:
         if max_keyframes < 0:
             max_keyframes = MAX_KEYFRAMES
 
-        # Guard against oversized payloads causing OOM on Render free tier
-        if _IS_RENDER and len(base64_frames) > 6:
-            base64_frames = base64_frames[:6]
+        # Uniformly span the entire 4-5 second video timeline
+        if _IS_RENDER and len(base64_frames) > 12:
+            indices = np.linspace(0, len(base64_frames) - 1, 12, dtype=int)
+            base64_frames = [base64_frames[i] for i in indices]
+        elif len(base64_frames) > 24:
+            indices = np.linspace(0, len(base64_frames) - 1, 24, dtype=int)
+            base64_frames = [base64_frames[i] for i in indices]
 
         decoded_frames = []
         for idx, b64_str in enumerate(base64_frames):

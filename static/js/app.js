@@ -556,33 +556,52 @@ async function startSmartboardAttendance() {
     await new Promise(r => setTimeout(r, 200));
   }
 
-  statusText.innerText = '🔒 Auto-Lock Active (Autofocus Locked) — Capturing Rows...';
+  statusText.innerHTML = '📹 <strong>Starting 5-Second Video Sweep...</strong>';
 
   const capturedFrames = [];
-  // Capture 6 Full-HD keyframes across 2 seconds — select best 4 on server
-  const captureDurationMs = 2000;
-  const intervalMs = 330;
+  // Capture 20 keyframes across 5-second video sweep (covering all classroom rows from left to right)
+  const captureDurationMs = 5000;
+  const intervalMs = 250;
   const startTime = Date.now();
 
   const timer = setInterval(() => {
     const elapsed = Date.now() - startTime;
+    const remaining = Math.max(0, (captureDurationMs - elapsed) / 1000).toFixed(1);
+    const progressPct = Math.min(100, Math.round((elapsed / captureDurationMs) * 100));
+
+    statusText.innerHTML = `📹 <span style="color:#EF4444;font-weight:800;">● RECORDING VIDEO SWEEP (${remaining}s remaining)</span> — Pan camera slowly across all students`;
+    if (startBtn) {
+      startBtn.innerHTML = `
+        <span class="recording-pulse-dot" style="display:inline-block;width:12px;height:12px;background:#EF4444;border-radius:50%;margin-right:8px;box-shadow:0 0 8px #EF4444;"></span>
+        [ 📹 RECORDING VIDEO SWEEP: ${remaining}s (${progressPct}%) ]
+      `;
+    }
 
     if (state.webcamStream && video.readyState >= 2) {
       ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.92));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
     } else {
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(0, 0, captureWidth, captureHeight);
       ctx.fillStyle = '#38BDF8';
       ctx.font = '20px sans-serif';
       ctx.fillText(`Classroom Smartboard Frame ${capturedFrames.length + 1}`, 50, 100);
-      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.92));
+      capturedFrames.push(canvas.toDataURL('image/jpeg', 0.90));
     }
 
     if (elapsed >= captureDurationMs) {
       clearInterval(timer);
       pill.className = 'camera-status-pill ready';
-      statusText.innerText = '⚡ Evaluating Neural Facial Biometrics (Focus Locked)...';
+      statusText.innerHTML = `⚡ <strong>Evaluating Neural Facial Biometrics (${capturedFrames.length} frames across 5s sweep)...</strong>`;
+      if (startBtn) {
+        startBtn.innerHTML = `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin-icon">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+          </svg>
+          [ ⚡ PROCESSING 5s VIDEO SWEEP... ]
+        `;
+      }
 
       sendFramesForProcessing(capturedFrames);
     }
@@ -651,7 +670,7 @@ async function sendFramesForProcessing(frames) {
     }
 
     document.getElementById('sbActionFooter').style.display = 'block';
-    showToast(`Attendance Processed! ${res.present_count} Recognized, ${res.pending_count} Pending Review.`);
+    showToast(`Attendance Complete! ${res.present_count} Present, ${res.absent_count} Absent of ${res.total_students} students.`);
   } catch (err) {
     if (state.focusLockWatchdog) {
       clearInterval(state.focusLockWatchdog);
@@ -741,10 +760,12 @@ function renderSmartboardResultsTable(records) {
     if (r.status === 'PRESENT') badgeClass = 'badge-present';
     if (r.status === 'REVIEW') badgeClass = 'badge-review';
 
+    const confDisplay = r.confidence ? (String(r.confidence).endsWith('%') ? r.confidence : `${r.confidence}%`) : '0%';
+
     tr.innerHTML = `
       <td><strong>${r.student_id}</strong></td>
       <td>${r.student_name}</td>
-      <td>${r.confidence}%</td>
+      <td>${confDisplay}</td>
       <td>
         <button type="button" class="badge ${badgeClass} status-toggle-btn" 
           onclick="toggleStudentAttendanceStatus('${r.student_id}', '${r.status}')" 

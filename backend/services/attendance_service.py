@@ -220,9 +220,9 @@ def process_smartboard_session(
                     top_1 = float(s_sorted[0])
                     top_2 = float(s_sorted[1]) if len(s_sorted) > 1 else top_1
                     top_3 = float(s_sorted[2]) if len(s_sorted) > 2 else top_2
-                    # Anti-Fluke Multi-Template Consensus:
-                    # Penalizes random 1-template spikes from impostors while rewarding genuine multi-profile match
-                    comp_score = 0.50 * top_1 + 0.30 * top_2 + 0.20 * top_3
+                    # Robust multi-template scoring:
+                    # Strongly weighs best matching template while rewarding multi-profile verification
+                    comp_score = max(top_1 * 0.92, 0.65 * top_1 + 0.25 * top_2 + 0.10 * top_3)
                     sim_matrix[f_idx, s_col] = comp_score
 
         # Identify candidate students for each face using Hungarian bipartite matching + strict margins
@@ -254,16 +254,16 @@ def process_smartboard_session(
             is_hungarian_match = (hungarian_student_col is not None and hungarian_student_col == c1)
             st_id = student_obj_ids[c1]
 
-            # Calibrated candidate thresholds for classroom depth & back-row faces
+            # Calibrated candidate thresholds for video sweep recognition & back-row faces
             if face_w < 60 or face_h < 60:
-                min_match_thresh = 0.48
-                min_margin_thresh = 0.055
+                min_match_thresh = 0.44
+                min_margin_thresh = 0.030
             elif face_w < 95 or face_h < 95:
-                min_match_thresh = 0.52
-                min_margin_thresh = 0.060
+                min_match_thresh = 0.46
+                min_margin_thresh = 0.035
             else:
-                min_match_thresh = 0.56
-                min_margin_thresh = 0.065
+                min_match_thresh = 0.48
+                min_margin_thresh = 0.038
 
             is_valid_student = (is_hungarian_match and match_score >= min_match_thresh and margin >= min_margin_thresh)
 
@@ -380,22 +380,22 @@ def process_smartboard_session(
         is_distant = ev.get("is_distant", False)
 
         # -----------------------------------------------------------------------
-        # ATTENDANCE DECISION LADDER (Anti-Fluke Exact Long-Distance Precision)
+        # ATTENDANCE DECISION LADDER (Video Sweep High-Precision Biometrics)
         # -----------------------------------------------------------------------
-        # Tier 1 - Unambiguous Front/Mid-Row Match (>= 0.65, margin >= 0.10, 1+ frames) -> AUTO PRESENT
-        # Tier 2 - Multi-Frame Consensus Front/Mid-Row (>= 0.58, avg >= 0.52, margin >= 0.065, 2+ frames) -> AUTO PRESENT
-        # Tier 3 - Distant / Long-Sight Consensus (is_distant, >= 0.54, avg >= 0.48, margin >= 0.055, 2+ frames) -> AUTO PRESENT
-        # Tier 4 - Review (Borderline candidate >= 0.42, margin >= 0.025, 1+ frames): needs staff verification
-        # Tier 5 - Absent: All others (guarantees absent students never marked present)
+        # Tier 1 - High Confidence Single-Frame Match (>= 0.48, margin >= 0.035, 1+ frames) -> AUTO PRESENT
+        # Tier 2 - Multi-Frame Video Sweep Consensus (>= 0.44, margin >= 0.025, 2+ frames)  -> AUTO PRESENT
+        # Tier 3 - Distant / Back-Row Match (is_distant, >= 0.44, margin >= 0.025, 1+ frames) -> AUTO PRESENT
+        # Tier 4 - Review (Borderline candidate >= 0.40, 1+ frames): needs staff verification
+        # Tier 5 - Absent: All others (0 detections or non-matching, guarantees absent students never marked present)
         # -----------------------------------------------------------------------
         is_present = (
-            (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= 0.10 and frame_hits >= 1) or
-            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and avg_score >= 0.52 and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 2) or
-            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and avg_score >= 0.48 and max_margin >= 0.055 and frame_hits >= 2)
+            (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 1) or
+            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.025 and frame_hits >= 2) or
+            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.025 and frame_hits >= 1)
         )
         is_review = (
             not is_present and (
-                (max_score >= 0.42 and max_margin >= 0.025 and frame_hits >= 1)
+                (max_score >= 0.40 and frame_hits >= 1)
             )
         )
 

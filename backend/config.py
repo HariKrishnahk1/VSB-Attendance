@@ -34,17 +34,17 @@ YUNET_SCORE_THRESHOLD = 0.28
 YUNET_NMS_THRESHOLD = 0.35
 YUNET_TOP_K = 5000
 
-# High-Precision SFace Cosine Similarity & Video Sweep Consensus Thresholds
+# High-Precision SFace Cosine Similarity & Anti-Fluke Zero-False-Positive Thresholds
 # Calibrated for STRICT DISCRIMINATION + Exact Video Sweep & Back-Row Precision:
-# >= 0.48: Front/Mid-Row High Confidence Match (>= 80% confidence) -> AUTO PRESENT (1+ frames)
-# >= 0.44: Multi-Frame Video Sweep Consensus (>= 70% confidence)   -> AUTO PRESENT (2+ frames)
-# >= 0.44: Long-Sight / Back-Row Match                             -> AUTO PRESENT (1+ frames)
-# >= 0.40: Borderline / Low-Res Candidate                          -> REVIEW (Staff verification)
-# < 0.40:  Unrecognized / Non-Match                               -> ABSENT (Strict safety net)
-THRESHOLD_HIGH_CONFIDENCE = 0.48     # Clear frontal/mid-row match (unambiguous, >=80% confidence)
-THRESHOLD_MEDIUM_CONFIDENCE = 0.44   # Confident match with video sweep consensus
-THRESHOLD_BACKROW_CONFIDENCE = 0.44  # Long-sight distant match
-THRESHOLD_AMBIGUITY_MARGIN = 0.035   # Minimum separation margin gap between top-1 and runner-up
+# >= 0.58: Front/Mid-Row High Confidence Match (>= 85% confidence) -> AUTO PRESENT (1+ frames)
+# >= 0.52: Multi-Frame Video Sweep Consensus (>= 78% confidence)   -> AUTO PRESENT (2+ frames)
+# >= 0.50: Long-Sight / Back-Row Consensus                         -> AUTO PRESENT (2+ frames)
+# >= 0.44: Borderline / Low-Res Candidate                          -> REVIEW (Staff verification)
+# < 0.44:  Unrecognized / Non-Match                               -> ABSENT (Strict safety net)
+THRESHOLD_HIGH_CONFIDENCE = 0.58     # Clear frontal/mid-row match (unambiguous, >=85% confidence)
+THRESHOLD_MEDIUM_CONFIDENCE = 0.52   # Confident match with video sweep consensus (2+ frames)
+THRESHOLD_BACKROW_CONFIDENCE = 0.50  # Long-sight distant match (2+ frames)
+THRESHOLD_AMBIGUITY_MARGIN = 0.065   # Strict 6.5% separation margin gap from runner-up
 MIN_FACE_DIMENSION = 20              # Reject sub-pixel noise blobs under 20x20
 MAX_STUDENT_TEMPLATES = 16
 

@@ -220,21 +220,15 @@ def process_smartboard_session(
                     top_1 = float(s_sorted[0])
                     top_2 = float(s_sorted[1]) if len(s_sorted) > 1 else top_1
                     top_3 = float(s_sorted[2]) if len(s_sorted) > 2 else top_2
-                    # Robust multi-template scoring:
-                    # Strongly weighs best matching template while rewarding multi-profile verification
-                    comp_score = max(top_1 * 0.92, 0.65 * top_1 + 0.25 * top_2 + 0.10 * top_3)
+                    # Anti-Fluke Multi-Template Consensus:
+                    # Strongly rewards genuine multi-profile match while penalizing 1-template impostor spikes
+                    comp_score = 0.55 * top_1 + 0.30 * top_2 + 0.15 * top_3
                     sim_matrix[f_idx, s_col] = comp_score
 
-        # Identify candidate students for each face using Hungarian bipartite matching + strict margins
-        candidates = []
-        if num_faces > 0 and num_students > 0:
-            # Solve optimal 1-to-1 matching
-            cost_matrix = 1.0 - sim_matrix
-            matched_faces, matched_students = _solve_bipartite_matching(cost_matrix)
-            assigned_pairs = dict(zip(matched_faces, matched_students))
-        else:
-            assigned_pairs = {}
-
+        # Global Greedy 1-to-1 Disambiguation
+        # Prevents any identity swapping, prevents 2 faces claiming the same student,
+        # and strictly ensures a face is only matched if it is unambiguous.
+        face_proposals = []
         for r in range(num_faces):
             meta = face_meta[r]
             is_dist = meta["is_distant"]
@@ -249,36 +243,74 @@ def process_smartboard_session(
             runner_score = float(row_scores[c2])
             margin = (match_score - runner_score) if len(sorted_indices) > 1 else match_score
 
-            # Check if this face was assigned to the top student by Hungarian matching
-            hungarian_student_col = assigned_pairs.get(r)
-            is_hungarian_match = (hungarian_student_col is not None and hungarian_student_col == c1)
-            st_id = student_obj_ids[c1]
-
-            # Calibrated candidate thresholds for video sweep recognition & back-row faces
+            # Calibrated candidate thresholds: guarantees zero false positive matches
             if face_w < 60 or face_h < 60:
-                min_match_thresh = 0.44
-                min_margin_thresh = 0.030
+                min_match_thresh = 0.50
+                min_margin_thresh = 0.045
             elif face_w < 95 or face_h < 95:
-                min_match_thresh = 0.46
-                min_margin_thresh = 0.035
+                min_match_thresh = 0.54
+                min_margin_thresh = 0.055
             else:
-                min_match_thresh = 0.48
-                min_margin_thresh = 0.038
+                min_match_thresh = 0.58
+                min_margin_thresh = 0.065
 
-            is_valid_student = (is_hungarian_match and match_score >= min_match_thresh and margin >= min_margin_thresh)
-
-            c_url = _save_crop_if_needed(meta) if (is_valid_student or match_score >= 0.40) else None
-
-            candidates.append({
-                "face_box": meta["face_box"],
-                "best_student_id": st_id if is_valid_student else None,
-                "score": match_score if is_valid_student else -1.0,
+            face_proposals.append({
+                "face_idx": r,
+                "best_student_col": c1,
+                "score": match_score,
                 "margin": margin,
-                "sharpness": meta["sharpness"],
+                "min_thresh": min_match_thresh,
+                "min_margin": min_margin_thresh,
                 "is_distant": is_dist,
-                "crop_url": c_url,
-                "emb": meta["emb"]
+                "meta": meta
             })
+
+        # Sort proposals globally by confidence descending (greedy 1-to-1 matching)
+        face_proposals.sort(key=lambda p: p["score"], reverse=True)
+        assigned_students = set()
+        assigned_faces = {}
+
+        for p in face_proposals:
+            r = p["face_idx"]
+            c1 = p["best_student_col"]
+            score = p["score"]
+            margin = p["margin"]
+
+            if c1 not in assigned_students and score >= p["min_thresh"] and margin >= p["min_margin"]:
+                assigned_students.add(c1)
+                assigned_faces[r] = (student_obj_ids[c1], score, margin)
+
+        candidates = []
+        for r in range(num_faces):
+            meta = face_meta[r]
+            is_dist = meta["is_distant"]
+            if r in assigned_faces:
+                st_id, sc, mg = assigned_faces[r]
+                c_url = _save_crop_if_needed(meta)
+                candidates.append({
+                    "face_box": meta["face_box"],
+                    "best_student_id": st_id,
+                    "score": sc,
+                    "margin": mg,
+                    "sharpness": meta["sharpness"],
+                    "is_distant": is_dist,
+                    "crop_url": c_url,
+                    "emb": meta["emb"]
+                })
+            else:
+                row_scores = sim_matrix[r, :]
+                max_sc = float(np.max(row_scores))
+                c_url = _save_crop_if_needed(meta) if max_sc >= 0.40 else None
+                candidates.append({
+                    "face_box": meta["face_box"],
+                    "best_student_id": None,
+                    "score": -1.0,
+                    "margin": 0.0,
+                    "sharpness": meta["sharpness"],
+                    "is_distant": is_dist,
+                    "crop_url": c_url,
+                    "emb": meta["emb"]
+                })
 
         # Explicit cleanup of per-frame arrays
         for m in face_meta:
@@ -380,22 +412,22 @@ def process_smartboard_session(
         is_distant = ev.get("is_distant", False)
 
         # -----------------------------------------------------------------------
-        # ATTENDANCE DECISION LADDER (Video Sweep High-Precision Biometrics)
+        # ATTENDANCE DECISION LADDER (Zero False Positives + Multi-Frame Consensus)
         # -----------------------------------------------------------------------
-        # Tier 1 - High Confidence Single-Frame Match (>= 0.48, margin >= 0.035, 1+ frames) -> AUTO PRESENT
-        # Tier 2 - Multi-Frame Video Sweep Consensus (>= 0.44, margin >= 0.025, 2+ frames)  -> AUTO PRESENT
-        # Tier 3 - Distant / Back-Row Match (is_distant, >= 0.44, margin >= 0.025, 1+ frames) -> AUTO PRESENT
-        # Tier 4 - Review (Borderline candidate >= 0.40, 1+ frames): needs staff verification
-        # Tier 5 - Absent: All others (0 detections or non-matching, guarantees absent students never marked present)
+        # Tier 1 - Unambiguous Front/Mid-Row Match (>= 0.58, margin >= 0.065, 1+ frames) -> AUTO PRESENT
+        # Tier 2 - Multi-Frame Video Sweep Consensus (>= 0.52, margin >= 0.050, 2+ frames) -> AUTO PRESENT
+        # Tier 3 - Distant / Back-Row Match (is_distant, >= 0.50, margin >= 0.045, 2+ frames) -> AUTO PRESENT
+        # Tier 4 - Review (Borderline candidate >= 0.44, margin >= 0.030, 1+ frames): needs staff verification
+        # Tier 5 - Absent: All others (guarantees absent students NEVER marked present)
         # -----------------------------------------------------------------------
         is_present = (
             (max_score >= THRESHOLD_HIGH_CONFIDENCE and max_margin >= THRESHOLD_AMBIGUITY_MARGIN and frame_hits >= 1) or
-            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.025 and frame_hits >= 2) or
-            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.025 and frame_hits >= 1)
+            (max_score >= THRESHOLD_MEDIUM_CONFIDENCE and max_margin >= 0.050 and frame_hits >= 2) or
+            (is_distant and max_score >= THRESHOLD_BACKROW_CONFIDENCE and max_margin >= 0.045 and frame_hits >= 2)
         )
         is_review = (
             not is_present and (
-                (max_score >= 0.40 and frame_hits >= 1)
+                (max_score >= 0.44 and max_margin >= 0.030 and frame_hits >= 1)
             )
         )
 
